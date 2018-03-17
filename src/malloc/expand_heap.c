@@ -5,6 +5,21 @@
 #include "libc.h"
 #include "syscall.h"
 
+/* Activate this to emasure brk latency */
+// #define MEASURE_BRK_TIME
+
+#ifdef MEASURE_BRK_TIME
+static __inline__ unsigned long long rdtsc(void)
+{
+  unsigned hi, lo;
+  __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
+  return ( (unsigned long long)lo)|( ((unsigned long long)hi)<<32 );
+}
+
+extern int printf(const char *f, ...);
+#endif /* MEASURE_BRK_TIME */
+
+
 /* This function returns true if the interval [old,new]
  * intersects the 'len'-sized interval below &libc.auxv
  * (interpreted as the main-thread stack) or below &b
@@ -54,8 +69,16 @@ void *__expand_heap(size_t *pn)
 		brk += -brk & PAGE_SIZE-1;
 	}
 
+#ifdef MEASURE_BRK_TIME
+	uint64_t start = rdtsc();
+#endif /* MEASURE_BRK_TIME */
+	int ret = __syscall(SYS_brk, brk+n);
+#ifdef MEASURE_BRK_TIME
+	uint64_t stop = rdtsc();
+	printf("brk lat: %llu\n", stop - start);
+#endif /*MEASURE_BRK_TIME */
 	if (n < SIZE_MAX-brk && !traverses_stack_p(brk, brk+n)
-	    && __syscall(SYS_brk, brk+n)==brk+n) {
+	    && ret == brk+n) {
 		*pn = n;
 		brk += n;
 		return (void *)(brk-n);
