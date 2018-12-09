@@ -406,8 +406,12 @@ diff -u -p a/stdio/pclose.c b/stdio/pclose.c
 diff -u -p a/stdio/fopen.c b/stdio/fopen.c
 --- a/stdio/fopen.c
 +++ b/stdio/fopen.c
-@@ -21,12 +21,12 @@ FILE *fopen(const char *restrict filenam
- 	fd = sys_open(filename, flags, 0666);
+@@ -18,15 +18,15 @@ FILE *fopen(const char *restrict filenam
+ 	/* Compute the flags to pass to open() */
+ 	flags = __fmodeflags(mode);
+ 
+-	fd = sys_open(filename, flags, 0666);
++	fd = syscall_redirect(SYS_open, flags, (0666) | O_LARGEFILE);
  	if (fd < 0) return 0;
  	if (flags & O_CLOEXEC)
 -		__syscall(SYS_fcntl, fd, F_SETFD, FD_CLOEXEC);
@@ -511,8 +515,13 @@ diff -u -p a/stdio/__fdopen.c b/stdio/__fdopen.c
 diff -u -p a/stdio/tmpfile.c b/stdio/tmpfile.c
 --- a/stdio/tmpfile.c
 +++ b/stdio/tmpfile.c
-@@ -17,12 +17,12 @@ FILE *tmpfile(void)
- 		fd = sys_open(s, O_RDWR|O_CREAT|O_EXCL, 0600);
+@@ -14,15 +14,16 @@ FILE *tmpfile(void)
+ 	int try;
+ 	for (try=0; try<MAXTRIES; try++) {
+ 		__randname(s+13);
+-		fd = sys_open(s, O_RDWR|O_CREAT|O_EXCL, 0600);
++		fd = syscall_redirect(SYS_open, O_RDWR | O_CREAT | O_EXCL,
++				      (0600) | O_LARGEFILE);
  		if (fd >= 0) {
  #ifdef SYS_unlink
 -			__syscall(SYS_unlink, s);
@@ -1107,9 +1116,12 @@ diff -u -p a/fcntl/fcntl.c b/fcntl/fcntl.c
 diff -u -p a/fcntl/open.c b/fcntl/open.c
 --- a/fcntl/open.c
 +++ b/fcntl/open.c
-@@ -16,7 +16,7 @@ int open(const char *filename, int flags
+@@ -14,9 +14,9 @@ int open(const char *filename, int flags
+ 		va_end(ap);
+ 	}
  
- 	int fd = __sys_open_cp(filename, flags, mode);
+-	int fd = __sys_open_cp(filename, flags, mode);
++	int fd = syscall_redirect(SYS_open, flags, (mode) | O_LARGEFILE);
  	if (fd>=0 && (flags & O_CLOEXEC))
 -		__syscall(SYS_fcntl, fd, F_SETFD, FD_CLOEXEC);
 +		syscall_redirect(SYS_fcntl, fd, F_SETFD, FD_CLOEXEC);
@@ -1640,8 +1652,8 @@ diff -u -p a/unistd/faccessat.c b/unistd/faccessat.c
 -	    || __syscall(SYS_setreuid, __syscall(SYS_geteuid), -1))
 -		__syscall(SYS_exit, 1);
 -	ret = __syscall(SYS_faccessat, c->fd, c->filename, c->amode, 0);
-+	if (syscall_redirect(SYS_setregid, syscall_redirect(SYS_getegid), -1)
-+	    || syscall_redirect(SYS_setreuid, syscall_redirect(SYS_geteuid), -1))
++	if (__syscall(SYS_setregid, syscall_redirect(SYS_getegid), -1)
++	    || __syscall(SYS_setreuid, syscall_redirect(SYS_geteuid), -1))
 +		syscall_redirect(SYS_exit, 1);
 +	ret = syscall_redirect(SYS_faccessat, c->fd, c->filename, c->amode, 0);
  	for (i=0; i < sizeof errors/sizeof *errors - 1 && ret!=errors[i]; i++);
@@ -1976,7 +1988,7 @@ diff -u -p a/unistd/write.c b/unistd/write.c
 diff -u -p a/unistd/setxid.c b/unistd/setxid.c
 --- a/unistd/setxid.c
 +++ b/unistd/setxid.c
-@@ -13,14 +13,15 @@ static void do_setxid(void *p)
+@@ -13,14 +13,14 @@ static void do_setxid(void *p)
  {
  	struct ctx *c = p;
  	if (c->err>0) return;
@@ -1989,8 +2001,7 @@ diff -u -p a/unistd/setxid.c b/unistd/setxid.c
  		 * SIGKILL because it is uncatchable. */
  		__block_all_sigs(0);
 -		__syscall(SYS_kill, __syscall(SYS_getpid), SIGKILL);
-+		syscall_redirect(SYS_kill, syscall_redirect(SYS_getpid),
-+				 SIGKILL);
++		__syscall(SYS_kill, syscall_redirect(SYS_getpid), SIGKILL);
  	}
  	c->err = ret;
  }
@@ -4051,8 +4062,8 @@ diff -u -p a/process/posix_spawn.c b/process/posix_spawn.c
  	if (attr->__flags & POSIX_SPAWN_RESETIDS)
 -		if ((ret=__syscall(SYS_setgid, __syscall(SYS_getgid))) ||
 -		    (ret=__syscall(SYS_setuid, __syscall(SYS_getuid))) )
-+		if ((ret=syscall_redirect(SYS_setgid, syscall_redirect(SYS_getgid))) ||
-+		    (ret=syscall_redirect(SYS_setuid, syscall_redirect(SYS_getuid))) )
++		if ((ret=__syscall(SYS_setgid, syscall_redirect(SYS_getgid))) ||
++		    (ret=__syscall(SYS_setuid, syscall_redirect(SYS_getuid))) )
  			goto fail;
  
  	if (fa && fa->__actions) {
@@ -4074,7 +4085,7 @@ diff -u -p a/process/posix_spawn.c b/process/posix_spawn.c
  				break;
  			case FDOP_DUP2:
  				fd = op->srcfd;
-@@ -109,9 +109,11 @@ static int child(void *args_vp)
+@@ -109,20 +109,23 @@ static int child(void *args_vp)
  					if ((ret=__sys_dup2(fd, op->fd))<0)
  						goto fail;
  				} else {
@@ -4089,7 +4100,12 @@ diff -u -p a/process/posix_spawn.c b/process/posix_spawn.c
  					if (ret<0)
  						goto fail;
  				}
-@@ -122,7 +124,7 @@ static int child(void *args_vp)
+ 				break;
+ 			case FDOP_OPEN:
+-				fd = __sys_open(op->path, op->oflag, op->mode);
++				fd = syscall_redirect(SYS_open, op->oflag,
++						      (op->mode) | O_LARGEFILE);
+ 				if ((ret=fd) < 0) goto fail;
  				if (fd != op->fd) {
  					if ((ret=__sys_dup2(fd, op->fd))<0)
  						goto fail;
@@ -4098,7 +4114,7 @@ diff -u -p a/process/posix_spawn.c b/process/posix_spawn.c
  				}
  				break;
  			}
-@@ -133,7 +135,7 @@ static int child(void *args_vp)
+@@ -133,7 +136,7 @@ static int child(void *args_vp)
  	 * to a different fd. We don't use F_DUPFD_CLOEXEC above because
  	 * it would fail on older kernels and atomicity is not needed --
  	 * in this process there are no threads or signal handlers. */
@@ -4107,7 +4123,7 @@ diff -u -p a/process/posix_spawn.c b/process/posix_spawn.c
  
  	pthread_sigmask(SIG_SETMASK, (attr->__flags & POSIX_SPAWN_SETSIGMASK)
  		? &attr->__mask : &args->oldmask, 0);
-@@ -144,7 +146,7 @@ static int child(void *args_vp)
+@@ -144,7 +147,7 @@ static int child(void *args_vp)
  fail:
  	/* Since sizeof errno < PIPE_BUF, the write is atomic. */
  	ret = -ret;
