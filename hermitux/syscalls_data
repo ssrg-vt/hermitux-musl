@@ -287,7 +287,7 @@
 286,4,timerfd_settime
 287,2,timerfd_gettime
 288,4,accept4
-289	signalfd4
+289,4,signalfd4
 290,2,eventfd2
 291,1,epoll_create1
 292,3,dup3
