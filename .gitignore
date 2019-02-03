@@ -9,3 +9,4 @@ lib/musl-gcc.specs
 prefix
 cscope.out
 tags
+src/misc/htux_syscalls.c.generated
