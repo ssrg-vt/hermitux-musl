@@ -6,11 +6,11 @@ diff -u -p a/env/__init_tls.c b/env/__init_tls.c
  	if (r < 0) return -1;
  	if (!r) libc.can_do_threads = 1;
 -	td->tid = __syscall(SYS_set_tid_address, &td->tid);
-+	td->tid = syscall_redirect(SYS_set_tid_address, &td->tid);
++	td->tid = syscall_redirect(SYS_set_tid_address, 1, (long)&td->tid);
  	td->locale = &libc.global_locale;
  	td->robust_list.head = &td->robust_list.head;
  	return 0;
-@@ -117,10 +117,10 @@ static void static_init_tls(size_t *aux)
+@@ -117,10 +117,11 @@ static void static_init_tls(size_t *aux)
  #ifndef SYS_mmap2
  #define SYS_mmap2 SYS_mmap
  #endif
@@ -18,10 +18,11 @@ diff -u -p a/env/__init_tls.c b/env/__init_tls.c
 -			SYS_mmap2,
 -			0, libc.tls_size, PROT_READ|PROT_WRITE,
 -			MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
-+		mem = (void *)syscall_redirect(SYS_mmap2, 0, libc.tls_size,
-+				               PROT_READ | PROT_WRITE,
-+				               MAP_ANONYMOUS | MAP_PRIVATE,
-+				               -1, 0);
++		mem = (void *)syscall_redirect(SYS_mmap2, 6, (long)0,
++				               (long)libc.tls_size,
++				               (long)(PROT_READ | PROT_WRITE),
++				               (long)(MAP_ANONYMOUS | MAP_PRIVATE),
++				               (long)-1, (long)0);
  		/* -4095...-1 cast to void * will crash on dereference anyway,
  		 * so don't bloat the init code checking for error codes and
  		 * explicitly calling a_crash(). */
@@ -33,24 +34,25 @@ diff -u -p a/env/__libc_start_main.c b/env/__libc_start_main.c
  	struct pollfd pfd[3] = { {.fd=0}, {.fd=1}, {.fd=2} };
  #ifdef SYS_poll
 -	__syscall(SYS_poll, pfd, 3, 0);
-+	syscall_redirect(SYS_poll, pfd, 3, 0);
++	syscall_redirect(SYS_poll, 3, (long)pfd, (long)3, (long)0);
  #else
 -	__syscall(SYS_ppoll, pfd, 3, &(struct timespec){0}, 0, _NSIG/8);
-+	syscall_redirect(SYS_ppoll, pfd, 3, &(struct timespec){
++	syscall_redirect(SYS_ppoll, 5, (long)pfd, (long)3, (long)&(struct timespec){
 +			0,
-+		}, 0, _NSIG / 8);
++		}, (long)0, (long)(_NSIG / 8));
  #endif
  	for (i=0; i<3; i++) if (pfd[i].revents&POLLNVAL)
  		if (__sys_open("/dev/null", O_RDWR)<0)
 diff -u -p a/aio/lio_listio.c b/aio/lio_listio.c
 --- a/aio/lio_listio.c
 +++ b/aio/lio_listio.c
-@@ -47,7 +47,7 @@ static void notify_signal(struct sigeven
+@@ -47,7 +47,8 @@ static void notify_signal(struct sigeven
  		.si_pid = getpid(),
  		.si_uid = getuid()
  	};
 -	__syscall(SYS_rt_sigqueueinfo, si.si_pid, si.si_signo, &si);
-+	syscall_redirect(SYS_rt_sigqueueinfo, si.si_pid, si.si_signo, &si);
++	syscall_redirect(SYS_rt_sigqueueinfo, 3, (long)si.si_pid,
++			 (long)si.si_signo, (long)&si);
  }
  
  static void *wait_thread(void *p)
@@ -62,21 +64,22 @@ diff -u -p a/aio/aio.c b/aio/aio.c
  			.si_uid = getuid()
  		};
 -		__syscall(SYS_rt_sigqueueinfo, si.si_pid, si.si_signo, &si);
-+		syscall_redirect(SYS_rt_sigqueueinfo, si.si_pid, si.si_signo,
-+				 &si);
++		syscall_redirect(SYS_rt_sigqueueinfo, 3, (long)si.si_pid,
++				 (long)si.si_signo, (long)&si);
  	}
  	if (sev.sigev_notify == SIGEV_THREAD) {
  		a_store(&__pthread_self()->cancel, 0);
 diff -u -p a/signal/sigsetjmp_tail.c b/signal/sigsetjmp_tail.c
 --- a/signal/sigsetjmp_tail.c
 +++ b/signal/sigsetjmp_tail.c
-@@ -6,6 +6,7 @@ __attribute__((__visibility__("hidden"))
+@@ -6,6 +6,8 @@ __attribute__((__visibility__("hidden"))
  int __sigsetjmp_tail(sigjmp_buf jb, int ret)
  {
  	void *p = jb->__ss;
 -	__syscall(SYS_rt_sigprocmask, SIG_SETMASK, ret?p:0, ret?0:p, _NSIG/8);
-+	syscall_redirect(SYS_rt_sigprocmask, SIG_SETMASK, ret ? p : 0,
-+			 ret ? 0 : p, _NSIG / 8);
++	syscall_redirect(SYS_rt_sigprocmask, 4, (long)SIG_SETMASK,
++			 (long)(ret ? p : 0), (long)(ret ? 0 : p),
++			 (long)(_NSIG / 8));
  	return ret;
  }
 diff -u -p a/signal/raise.c b/signal/raise.c
@@ -88,54 +91,57 @@ diff -u -p a/signal/raise.c b/signal/raise.c
  	__block_app_sigs(&set);
 -	tid = __syscall(SYS_gettid);
 -	ret = syscall(SYS_tkill, tid, sig);
-+	tid = syscall_redirect(SYS_gettid);
-+	ret = syscall_redirect(SYS_tkill, tid, sig);
++	tid = syscall_redirect(SYS_gettid, 0);
++	ret = syscall_redirect(SYS_tkill, 2, (long)tid, (long)sig);
  	__restore_sigs(&set);
  	return ret;
  }
 diff -u -p a/signal/sigqueue.c b/signal/sigqueue.c
 --- a/signal/sigqueue.c
 +++ b/signal/sigqueue.c
-@@ -16,7 +16,7 @@ int sigqueue(pid_t pid, int sig, const u
+@@ -16,7 +16,8 @@ int sigqueue(pid_t pid, int sig, const u
  	si.si_uid = getuid();
  	__block_app_sigs(&set);
  	si.si_pid = getpid();
 -	r = syscall(SYS_rt_sigqueueinfo, pid, sig, &si);
-+	r = syscall_redirect(SYS_rt_sigqueueinfo, pid, sig, &si);
++	r = syscall_redirect(SYS_rt_sigqueueinfo, 3, (long)pid, (long)sig,
++			     (long)&si);
  	__restore_sigs(&set);
  	return r;
  }
 diff -u -p a/signal/sigpending.c b/signal/sigpending.c
 --- a/signal/sigpending.c
 +++ b/signal/sigpending.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int sigpending(sigset_t *set)
  {
 -	return syscall(SYS_rt_sigpending, set, _NSIG/8);
-+	return syscall_redirect(SYS_rt_sigpending, set, _NSIG / 8);
++	return syscall_redirect(SYS_rt_sigpending, 2, (long)set,
++				(long)(_NSIG / 8));
  }
 diff -u -p a/signal/sigaction.c b/signal/sigaction.c
 --- a/signal/sigaction.c
 +++ b/signal/sigaction.c
-@@ -31,8 +31,9 @@ int __libc_sigaction(int sig, const stru
+@@ -31,8 +31,10 @@ int __libc_sigaction(int sig, const stru
  			 * blocked) as part of the ucontext_t passed
  			 * to the signal handler. */
  			if (!libc.threaded && !unmask_done) {
 -				__syscall(SYS_rt_sigprocmask, SIG_UNBLOCK,
 -					SIGPT_SET, 0, _NSIG/8);
-+				syscall_redirect(SYS_rt_sigprocmask,
-+						 SIG_UNBLOCK, SIGPT_SET, 0,
-+						 _NSIG / 8);
++				syscall_redirect(SYS_rt_sigprocmask, 4,
++						 (long)SIG_UNBLOCK,
++						 (long)SIGPT_SET, (long)0,
++						 (long)(_NSIG / 8));
  				unmask_done = 1;
  			}
  		}
-@@ -41,7 +42,7 @@ int __libc_sigaction(int sig, const stru
+@@ -41,7 +43,7 @@ int __libc_sigaction(int sig, const stru
  		ksa.restorer = (sa->sa_flags & SA_SIGINFO) ? __restore_rt : __restore;
  		memcpy(&ksa.mask, &sa->sa_mask, sizeof ksa.mask);
  	}
 -	if (syscall(SYS_rt_sigaction, sig, sa?&ksa:0, old?&ksa_old:0, sizeof ksa.mask))
-+	if (syscall_redirect(SYS_rt_sigaction, sig, sa ? &ksa : 0, old ? &ksa_old : 0, sizeof ksa.mask))
++	if (syscall_redirect(SYS_rt_sigaction, 4, (long)sig, (long)(sa ? &ksa : 0), (long)(old ? &ksa_old : 0), (long)sizeof ksa.mask))
  		return -1;
  	if (old) {
  		old->sa_handler = ksa_old.handler;
@@ -147,31 +153,32 @@ diff -u -p a/signal/getitimer.c b/signal/getitimer.c
  int getitimer(int which, struct itimerval *old)
  {
 -	return syscall(SYS_getitimer, which, old);
-+	return syscall_redirect(SYS_getitimer, which, old);
++	return syscall_redirect(SYS_getitimer, 2, (long)which, (long)old);
  }
 diff -u -p a/signal/block.c b/signal/block.c
 --- a/signal/block.c
 +++ b/signal/block.c
-@@ -30,15 +30,17 @@ static const unsigned long app_mask[] =
+@@ -30,15 +30,18 @@ static const unsigned long app_mask[] =
  
  void __block_all_sigs(void *set)
  {
 -	__syscall(SYS_rt_sigprocmask, SIG_BLOCK, &all_mask, set, _NSIG/8);
-+	syscall_redirect(SYS_rt_sigprocmask, SIG_BLOCK, &all_mask, set,
-+			 _NSIG / 8);
++	syscall_redirect(SYS_rt_sigprocmask, 4, (long)SIG_BLOCK,
++			 (long)&all_mask, (long)set, (long)(_NSIG / 8));
  }
  
  void __block_app_sigs(void *set)
  {
 -	__syscall(SYS_rt_sigprocmask, SIG_BLOCK, &app_mask, set, _NSIG/8);
-+	syscall_redirect(SYS_rt_sigprocmask, SIG_BLOCK, &app_mask, set,
-+			 _NSIG / 8);
++	syscall_redirect(SYS_rt_sigprocmask, 4, (long)SIG_BLOCK,
++			 (long)&app_mask, (long)set, (long)(_NSIG / 8));
  }
  
  void __restore_sigs(void *set)
  {
 -	__syscall(SYS_rt_sigprocmask, SIG_SETMASK, set, 0, _NSIG/8);
-+	syscall_redirect(SYS_rt_sigprocmask, SIG_SETMASK, set, 0, _NSIG / 8);
++	syscall_redirect(SYS_rt_sigprocmask, 4, (long)SIG_SETMASK, (long)set,
++			 (long)0, (long)(_NSIG / 8));
  }
 diff -u -p a/signal/kill.c b/signal/kill.c
 --- a/signal/kill.c
@@ -181,7 +188,7 @@ diff -u -p a/signal/kill.c b/signal/kill.c
  int kill(pid_t pid, int sig)
  {
 -	return syscall(SYS_kill, pid, sig);
-+	return syscall_redirect(SYS_kill, pid, sig);
++	return syscall_redirect(SYS_kill, 2, (long)pid, (long)sig);
  }
 diff -u -p a/signal/sigaltstack.c b/signal/sigaltstack.c
 --- a/signal/sigaltstack.c
@@ -191,17 +198,18 @@ diff -u -p a/signal/sigaltstack.c b/signal/sigaltstack.c
  		}
  	}
 -	return syscall(SYS_sigaltstack, ss, old);
-+	return syscall_redirect(SYS_sigaltstack, ss, old);
++	return syscall_redirect(SYS_sigaltstack, 2, (long)ss, (long)old);
  }
 diff -u -p a/signal/setitimer.c b/signal/setitimer.c
 --- a/signal/setitimer.c
 +++ b/signal/setitimer.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int setitimer(int which, const struct itimerval *restrict new, struct itimerval *restrict old)
  {
 -	return syscall(SYS_setitimer, which, new, old);
-+	return syscall_redirect(SYS_setitimer, which, new, old);
++	return syscall_redirect(SYS_setitimer, 3, (long)which, (long)new,
++				(long)old);
  }
 diff -u -p a/signal/sigtimedwait.c b/signal/sigtimedwait.c
 --- a/signal/sigtimedwait.c
@@ -212,20 +220,21 @@ diff -u -p a/signal/sigtimedwait.c b/signal/sigtimedwait.c
  	int ret;
 -	do ret = syscall_cp(SYS_rt_sigtimedwait, mask,
 -		si, timeout, _NSIG/8);
-+	do ret = syscall_redirect(SYS_rt_sigtimedwait, mask, si, timeout,
-+				  _NSIG / 8);
++	do ret = syscall_redirect(SYS_rt_sigtimedwait, 4, (long)mask,
++				  (long)si, (long)timeout, (long)(_NSIG / 8));
  	while (ret<0 && errno==EINTR);
  	return ret;
  }
 diff -u -p a/signal/sigsuspend.c b/signal/sigsuspend.c
 --- a/signal/sigsuspend.c
 +++ b/signal/sigsuspend.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  int sigsuspend(const sigset_t *mask)
  {
 -	return syscall_cp(SYS_rt_sigsuspend, mask, _NSIG/8);
-+	return syscall_redirect(SYS_rt_sigsuspend, mask, _NSIG / 8);
++	return syscall_redirect(SYS_rt_sigsuspend, 2, (long)mask,
++				(long)(_NSIG / 8));
  }
 diff -u -p a/exit/_Exit.c b/exit/_Exit.c
 --- a/exit/_Exit.c
@@ -236,56 +245,59 @@ diff -u -p a/exit/_Exit.c b/exit/_Exit.c
  {
 -	__syscall(SYS_exit_group, ec);
 -	for (;;) __syscall(SYS_exit, ec);
-+	syscall_redirect(SYS_exit_group, ec);
-+	for (;;) syscall_redirect(SYS_exit, ec);
++	syscall_redirect(SYS_exit_group, 1, (long)ec);
++	for (;;) syscall_redirect(SYS_exit, 1, (long)ec);
  }
 diff -u -p a/stdio/__fopen_rb_ca.c b/stdio/__fopen_rb_ca.c
 --- a/stdio/__fopen_rb_ca.c
 +++ b/stdio/__fopen_rb_ca.c
-@@ -8,7 +8,7 @@ FILE *__fopen_rb_ca(const char *filename
+@@ -8,7 +8,8 @@ FILE *__fopen_rb_ca(const char *filename
  
  	f->fd = sys_open(filename, O_RDONLY|O_CLOEXEC);
  	if (f->fd < 0) return 0;
 -	__syscall(SYS_fcntl, f->fd, F_SETFD, FD_CLOEXEC);
-+	syscall_redirect(SYS_fcntl, f->fd, F_SETFD, FD_CLOEXEC);
++	syscall_redirect(SYS_fcntl, 3, (long)f->fd, (long)F_SETFD,
++			 (long)FD_CLOEXEC);
  
  	f->flags = F_NOWR | F_PERM;
  	f->buf = buf + UNGET;
 diff -u -p a/stdio/remove.c b/stdio/remove.c
 --- a/stdio/remove.c
 +++ b/stdio/remove.c
-@@ -6,14 +6,15 @@
+@@ -6,14 +6,16 @@
  int remove(const char *path)
  {
  #ifdef SYS_unlink
 -	int r = __syscall(SYS_unlink, path);
-+	int r = syscall_redirect(SYS_unlink, path);
++	int r = syscall_redirect(SYS_unlink, 1, (long)path);
  #else
 -	int r = __syscall(SYS_unlinkat, AT_FDCWD, path, 0);
-+	int r = syscall_redirect(SYS_unlinkat, AT_FDCWD, path, 0);
++	int r = syscall_redirect(SYS_unlinkat, 3, (long)AT_FDCWD, (long)path,
++				 (long)0);
  #endif
  #ifdef SYS_rmdir
 -	if (r==-EISDIR) r = __syscall(SYS_rmdir, path);
-+	if (r==-EISDIR) r = syscall_redirect(SYS_rmdir, path);
++	if (r==-EISDIR) r = syscall_redirect(SYS_rmdir, 1, (long)path);
  #else
 -	if (r==-EISDIR) r = __syscall(SYS_unlinkat, AT_FDCWD, path, AT_REMOVEDIR);
-+	if (r==-EISDIR) r = syscall_redirect(SYS_unlinkat, AT_FDCWD, path,
-+					     AT_REMOVEDIR);
++	if (r==-EISDIR) r = syscall_redirect(SYS_unlinkat, 3, (long)AT_FDCWD,
++					     (long)path, (long)AT_REMOVEDIR);
  #endif
  	return __syscall_ret(r);
  }
 diff -u -p a/stdio/rename.c b/stdio/rename.c
 --- a/stdio/rename.c
 +++ b/stdio/rename.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  int rename(const char *old, const char *new)
  {
  #ifdef SYS_rename
 -	return syscall(SYS_rename, old, new);
-+	return syscall_redirect(SYS_rename, old, new);
++	return syscall_redirect(SYS_rename, 2, (long)old, (long)new);
  #else
 -	return syscall(SYS_renameat, AT_FDCWD, old, AT_FDCWD, new);
-+	return syscall_redirect(SYS_renameat, AT_FDCWD, old, AT_FDCWD, new);
++	return syscall_redirect(SYS_renameat, 4, (long)AT_FDCWD, (long)old,
++				(long)AT_FDCWD, (long)new);
  #endif
  }
 diff -u -p a/stdio/popen.c b/stdio/popen.c
@@ -297,8 +309,8 @@ diff -u -p a/stdio/popen.c b/stdio/popen.c
  	if (!f) {
 -		__syscall(SYS_close, p[0]);
 -		__syscall(SYS_close, p[1]);
-+		syscall_redirect(SYS_close, p[0]);
-+		syscall_redirect(SYS_close, p[1]);
++		syscall_redirect(SYS_close, 1, (long)p[0]);
++		syscall_redirect(SYS_close, 1, (long)p[1]);
  		return NULL;
  	}
  	FLOCK(f);
@@ -307,25 +319,26 @@ diff -u -p a/stdio/popen.c b/stdio/popen.c
  			goto fail;
  		}
 -		__syscall(SYS_close, p[1-op]);
-+		syscall_redirect(SYS_close, p[1 - op]);
++		syscall_redirect(SYS_close, 1, (long)p[1 - op]);
  		p[1-op] = tmp;
  	}
  
-@@ -57,7 +57,7 @@ FILE *popen(const char *cmd, const char
+@@ -57,7 +57,8 @@ FILE *popen(const char *cmd, const char
  				f->pipe_pid = pid;
  				if (!strchr(mode, 'e'))
  					fcntl(p[op], F_SETFD, 0);
 -				__syscall(SYS_close, p[1-op]);
-+				syscall_redirect(SYS_close, p[1 - op]);
++				syscall_redirect(SYS_close, 1,
++						 (long)p[1 - op]);
  				FUNLOCK(f);
  				return f;
  			}
-@@ -66,7 +66,7 @@ FILE *popen(const char *cmd, const char
+@@ -66,7 +67,7 @@ FILE *popen(const char *cmd, const char
  	}
  fail:
  	fclose(f);
 -	__syscall(SYS_close, p[1-op]);
-+	syscall_redirect(SYS_close, p[1 - op]);
++	syscall_redirect(SYS_close, 1, (long)p[1 - op]);
  
  	errno = e;
  	return 0;
@@ -337,11 +350,11 @@ diff -u -p a/stdio/freopen.c b/stdio/freopen.c
  	if (!filename) {
  		if (fl&O_CLOEXEC)
 -			__syscall(SYS_fcntl, f->fd, F_SETFD, FD_CLOEXEC);
-+			syscall_redirect(SYS_fcntl, f->fd, F_SETFD,
-+					 FD_CLOEXEC);
++			syscall_redirect(SYS_fcntl, 3, (long)f->fd,
++					 (long)F_SETFD, (long)FD_CLOEXEC);
  		fl &= ~(O_CREAT|O_EXCL|O_CLOEXEC);
 -		if (syscall(SYS_fcntl, f->fd, F_SETFL, fl) < 0)
-+		if (syscall_redirect(SYS_fcntl, f->fd, F_SETFL, fl) < 0)
++		if (syscall_redirect(SYS_fcntl, 3, (long)f->fd, (long)F_SETFL, (long)fl) < 0)
  			goto fail;
  	} else {
  		f2 = fopen(filename, mode);
@@ -353,31 +366,32 @@ diff -u -p a/stdio/tempnam.c b/stdio/tempnam.c
  		__randname(s+l-6);
  #ifdef SYS_lstat
 -		r = __syscall(SYS_lstat, s, &(struct stat){0});
-+		r = syscall_redirect(SYS_lstat, s, &(struct stat){
++		r = syscall_redirect(SYS_lstat, 2, (long)s, (long)&(struct stat){
 +				0,
 +			});
  #else
 -		r = __syscall(SYS_fstatat, AT_FDCWD, s,
 -			&(struct stat){0}, AT_SYMLINK_NOFOLLOW);
-+		r = syscall_redirect(SYS_fstatat, AT_FDCWD, s, &(struct stat){
++		r = syscall_redirect(SYS_fstatat, 4, (long)AT_FDCWD, (long)s, (long)&(struct stat){
 +				0,
-+			}, AT_SYMLINK_NOFOLLOW);
++			}, (long)AT_SYMLINK_NOFOLLOW);
  #endif
  		if (r == -ENOENT) return strdup(s);
  	}
 diff -u -p a/stdio/__stdio_seek.c b/stdio/__stdio_seek.c
 --- a/stdio/__stdio_seek.c
 +++ b/stdio/__stdio_seek.c
-@@ -4,10 +4,10 @@ off_t __stdio_seek(FILE *f, off_t off, i
+@@ -4,10 +4,11 @@ off_t __stdio_seek(FILE *f, off_t off, i
  {
  	off_t ret;
  #ifdef SYS__llseek
 -	if (syscall(SYS__llseek, f->fd, off>>32, off, &ret, whence)<0)
-+	if (syscall_redirect(SYS__llseek, f->fd, off >> 32, off, &ret, whence)<0)
++	if (syscall_redirect(SYS__llseek, 5, (long)f->fd, (long)(off >> 32), (long)off, (long)&ret, (long)whence)<0)
  		ret = -1;
  #else
 -	ret = syscall(SYS_lseek, f->fd, off, whence);
-+	ret = syscall_redirect(SYS_lseek, f->fd, off, whence);
++	ret = syscall_redirect(SYS_lseek, 3, (long)f->fd, (long)off,
++			       (long)whence);
  #endif
  	return ret;
  }
@@ -389,7 +403,7 @@ diff -u -p a/stdio/__stdio_close.c b/stdio/__stdio_close.c
  int __stdio_close(FILE *f)
  {
 -	return syscall(SYS_close, __aio_close(f->fd));
-+	return syscall_redirect(SYS_close, __aio_close(f->fd));
++	return syscall_redirect(SYS_close, 1, (long)__aio_close(f->fd));
  }
 diff -u -p a/stdio/pclose.c b/stdio/pclose.c
 --- a/stdio/pclose.c
@@ -399,41 +413,44 @@ diff -u -p a/stdio/pclose.c b/stdio/pclose.c
  	pid_t pid = f->pipe_pid;
  	fclose(f);
 -	while ((r=__syscall(SYS_wait4, pid, &status, 0, 0)) == -EINTR);
-+	while ((r=syscall_redirect(SYS_wait4, pid, &status, 0, 0)) == -EINTR);
++	while ((r=syscall_redirect(SYS_wait4, 4, (long)pid, (long)&status, (long)0, (long)0)) == -EINTR);
  	if (r<0) return __syscall_ret(r);
  	return status;
  }
 diff -u -p a/stdio/fopen.c b/stdio/fopen.c
 --- a/stdio/fopen.c
 +++ b/stdio/fopen.c
-@@ -18,15 +18,15 @@ FILE *fopen(const char *restrict filenam
+@@ -18,15 +18,17 @@ FILE *fopen(const char *restrict filenam
  	/* Compute the flags to pass to open() */
  	flags = __fmodeflags(mode);
  
 -	fd = sys_open(filename, flags, 0666);
-+	fd = syscall_redirect(SYS_open, flags, (0666) | O_LARGEFILE);
++	fd = syscall_redirect(SYS_open, 3, (long)filename, (long)flags,
++			      (long)((0666) | O_LARGEFILE));
  	if (fd < 0) return 0;
  	if (flags & O_CLOEXEC)
 -		__syscall(SYS_fcntl, fd, F_SETFD, FD_CLOEXEC);
-+		syscall_redirect(SYS_fcntl, fd, F_SETFD, FD_CLOEXEC);
++		syscall_redirect(SYS_fcntl, 3, (long)fd, (long)F_SETFD,
++				 (long)FD_CLOEXEC);
  
  	f = __fdopen(fd, mode);
  	if (f) return f;
  
 -	__syscall(SYS_close, fd);
-+	syscall_redirect(SYS_close, fd);
++	syscall_redirect(SYS_close, 1, (long)fd);
  	return 0;
  }
  
 diff -u -p a/stdio/__stdio_write.c b/stdio/__stdio_write.c
 --- a/stdio/__stdio_write.c
 +++ b/stdio/__stdio_write.c
-@@ -12,7 +12,7 @@ size_t __stdio_write(FILE *f, const unsi
+@@ -12,7 +12,8 @@ size_t __stdio_write(FILE *f, const unsi
  	int iovcnt = 2;
  	ssize_t cnt;
  	for (;;) {
 -		cnt = syscall(SYS_writev, f->fd, iov, iovcnt);
-+		cnt = syscall_redirect(SYS_writev, f->fd, iov, iovcnt);
++		cnt = syscall_redirect(SYS_writev, 3, (long)f->fd, (long)iov,
++				       (long)iovcnt);
  		if (cnt == rem) {
  			f->wend = f->buf + f->buf_size;
  			f->wpos = f->wbase = f->buf;
@@ -445,15 +462,15 @@ diff -u -p a/stdio/tmpnam.c b/stdio/tmpnam.c
  		__randname(s+12);
  #ifdef SYS_lstat
 -		r = __syscall(SYS_lstat, s, &(struct stat){0});
-+		r = syscall_redirect(SYS_lstat, s, &(struct stat){
++		r = syscall_redirect(SYS_lstat, 2, (long)s, (long)&(struct stat){
 +				0,
 +			});
  #else
 -		r = __syscall(SYS_fstatat, AT_FDCWD, s,
 -			&(struct stat){0}, AT_SYMLINK_NOFOLLOW);
-+		r = syscall_redirect(SYS_fstatat, AT_FDCWD, s, &(struct stat){
++		r = syscall_redirect(SYS_fstatat, 4, (long)AT_FDCWD, (long)s, (long)&(struct stat){
 +				0,
-+			}, AT_SYMLINK_NOFOLLOW);
++			}, (long)AT_SYMLINK_NOFOLLOW);
  #endif
  		if (r == -ENOENT) return strcpy(buf ? buf : internal, s);
  	}
@@ -465,7 +482,7 @@ diff -u -p a/stdio/__stdout_write.c b/stdio/__stdout_write.c
  	struct winsize wsz;
  	f->write = __stdio_write;
 -	if (!(f->flags & F_SVB) && __syscall(SYS_ioctl, f->fd, TIOCGWINSZ, &wsz))
-+	if (!(f->flags & F_SVB) && syscall_redirect(SYS_ioctl, f->fd, TIOCGWINSZ, &wsz))
++	if (!(f->flags & F_SVB) && syscall_redirect(SYS_ioctl, 3, (long)f->fd, (long)TIOCGWINSZ, (long)&wsz))
  		f->lbf = -1;
  	return __stdio_write(f, buf, len);
  }
@@ -477,74 +494,80 @@ diff -u -p a/stdio/__stdio_read.c b/stdio/__stdio_read.c
  	ssize_t cnt;
  
 -	cnt = syscall(SYS_readv, f->fd, iov, 2);
-+	cnt = syscall_redirect(SYS_readv, f->fd, iov, 2);
++	cnt = syscall_redirect(SYS_readv, 3, (long)f->fd, (long)iov, (long)2);
  	if (cnt <= 0) {
  		f->flags |= F_EOF ^ ((F_ERR^F_EOF) & cnt);
  		return cnt;
 diff -u -p a/stdio/__fdopen.c b/stdio/__fdopen.c
 --- a/stdio/__fdopen.c
 +++ b/stdio/__fdopen.c
-@@ -26,13 +26,15 @@ FILE *__fdopen(int fd, const char *mode)
+@@ -26,13 +26,18 @@ FILE *__fdopen(int fd, const char *mode)
  	if (!strchr(mode, '+')) f->flags = (*mode == 'r') ? F_NOWR : F_NORD;
  
  	/* Apply close-on-exec flag */
 -	if (strchr(mode, 'e')) __syscall(SYS_fcntl, fd, F_SETFD, FD_CLOEXEC);
-+	if (strchr(mode, 'e')) syscall_redirect(SYS_fcntl, fd, F_SETFD,
-+						FD_CLOEXEC);
++	if (strchr(mode, 'e')) syscall_redirect(SYS_fcntl, 3, (long)fd,
++						(long)F_SETFD,
++						(long)FD_CLOEXEC);
  
  	/* Set append mode on fd if opened for append */
  	if (*mode == 'a') {
 -		int flags = __syscall(SYS_fcntl, fd, F_GETFL);
-+		int flags = syscall_redirect(SYS_fcntl, fd, F_GETFL);
++		int flags = syscall_redirect(SYS_fcntl, 2, (long)fd,
++					     (long)F_GETFL);
  		if (!(flags & O_APPEND))
 -			__syscall(SYS_fcntl, fd, F_SETFL, flags | O_APPEND);
-+			syscall_redirect(SYS_fcntl, fd, F_SETFL,
-+					 flags | O_APPEND);
++			syscall_redirect(SYS_fcntl, 3, (long)fd,
++					 (long)F_SETFL,
++					 (long)(flags | O_APPEND));
  		f->flags |= F_APP;
  	}
  
-@@ -42,7 +44,7 @@ FILE *__fdopen(int fd, const char *mode)
+@@ -42,7 +47,7 @@ FILE *__fdopen(int fd, const char *mode)
  
  	/* Activate line buffered mode for terminals */
  	f->lbf = EOF;
 -	if (!(f->flags & F_NOWR) && !__syscall(SYS_ioctl, fd, TIOCGWINSZ, &wsz))
-+	if (!(f->flags & F_NOWR) && !syscall_redirect(SYS_ioctl, fd, TIOCGWINSZ, &wsz))
++	if (!(f->flags & F_NOWR) && !syscall_redirect(SYS_ioctl, 3, (long)fd, (long)TIOCGWINSZ, (long)&wsz))
  		f->lbf = '\n';
  
  	/* Initialize op ptrs. No problem if some are unneeded. */
 diff -u -p a/stdio/tmpfile.c b/stdio/tmpfile.c
 --- a/stdio/tmpfile.c
 +++ b/stdio/tmpfile.c
-@@ -14,15 +14,16 @@ FILE *tmpfile(void)
+@@ -14,15 +14,18 @@ FILE *tmpfile(void)
  	int try;
  	for (try=0; try<MAXTRIES; try++) {
  		__randname(s+13);
 -		fd = sys_open(s, O_RDWR|O_CREAT|O_EXCL, 0600);
-+		fd = syscall_redirect(SYS_open, O_RDWR | O_CREAT | O_EXCL,
-+				      (0600) | O_LARGEFILE);
++		fd = syscall_redirect(SYS_open, 3, (long)s,
++				      (long)(O_RDWR | O_CREAT | O_EXCL),
++				      (long)((0600) | O_LARGEFILE));
  		if (fd >= 0) {
  #ifdef SYS_unlink
 -			__syscall(SYS_unlink, s);
-+			syscall_redirect(SYS_unlink, s);
++			syscall_redirect(SYS_unlink, 1, (long)s);
  #else
 -			__syscall(SYS_unlinkat, AT_FDCWD, s, 0);
-+			syscall_redirect(SYS_unlinkat, AT_FDCWD, s, 0);
++			syscall_redirect(SYS_unlinkat, 3, (long)AT_FDCWD,
++					 (long)s, (long)0);
  #endif
  			f = __fdopen(fd, "w+");
 -			if (!f) __syscall(SYS_close, fd);
-+			if (!f) syscall_redirect(SYS_close, fd);
++			if (!f) syscall_redirect(SYS_close, 1, (long)fd);
  			return f;
  		}
  	}
 diff -u -p a/sched/sched_rr_get_interval.c b/sched/sched_rr_get_interval.c
 --- a/sched/sched_rr_get_interval.c
 +++ b/sched/sched_rr_get_interval.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int sched_rr_get_interval(pid_t pid, struct timespec *ts)
  {
 -	return syscall(SYS_sched_rr_get_interval, pid, ts);
-+	return syscall_redirect(SYS_sched_rr_get_interval, pid, ts);
++	return syscall_redirect(SYS_sched_rr_get_interval, 2, (long)pid,
++				(long)ts);
  }
 diff -u -p a/sched/sched_get_priority_max.c b/sched/sched_get_priority_max.c
 --- a/sched/sched_get_priority_max.c
@@ -554,35 +577,38 @@ diff -u -p a/sched/sched_get_priority_max.c b/sched/sched_get_priority_max.c
  int sched_get_priority_max(int policy)
  {
 -	return syscall(SYS_sched_get_priority_max, policy);
-+	return syscall_redirect(SYS_sched_get_priority_max, policy);
++	return syscall_redirect(SYS_sched_get_priority_max, 1, (long)policy);
  }
  
  int sched_get_priority_min(int policy)
  {
 -	return syscall(SYS_sched_get_priority_min, policy);
-+	return syscall_redirect(SYS_sched_get_priority_min, policy);
++	return syscall_redirect(SYS_sched_get_priority_min, 1, (long)policy);
  }
 diff -u -p a/sched/affinity.c b/sched/affinity.c
 --- a/sched/affinity.c
 +++ b/sched/affinity.c
-@@ -6,17 +6,17 @@
+@@ -6,17 +6,20 @@
  
  int sched_setaffinity(pid_t tid, size_t size, const cpu_set_t *set)
  {
 -	return syscall(SYS_sched_setaffinity, tid, size, set);
-+	return syscall_redirect(SYS_sched_setaffinity, tid, size, set);
++	return syscall_redirect(SYS_sched_setaffinity, 3, (long)tid,
++				(long)size, (long)set);
  }
  
  int pthread_setaffinity_np(pthread_t td, size_t size, const cpu_set_t *set)
  {
 -	return -__syscall(SYS_sched_setaffinity, td->tid, size, set);
-+	return -syscall_redirect(SYS_sched_setaffinity, td->tid, size, set);
++	return -syscall_redirect(SYS_sched_setaffinity, 3, (long)td->tid,
++				 (long)size, (long)set);
  }
  
  static int do_getaffinity(pid_t tid, size_t size, cpu_set_t *set)
  {
 -	long ret = __syscall(SYS_sched_getaffinity, tid, size, set);
-+	long ret = syscall_redirect(SYS_sched_getaffinity, tid, size, set);
++	long ret = syscall_redirect(SYS_sched_getaffinity, 3, (long)tid,
++				    (long)size, (long)set);
  	if (ret < 0) return ret;
  	if (ret < size) memset((char *)set+ret, 0, size-ret);
  	return 0;
@@ -594,7 +620,7 @@ diff -u -p a/sched/sched_yield.c b/sched/sched_yield.c
  int sched_yield()
  {
 -	return syscall(SYS_sched_yield);
-+	return syscall_redirect(SYS_sched_yield);
++	return syscall_redirect(SYS_sched_yield, 0);
  }
 diff -u -p a/sched/sched_getcpu.c b/sched/sched_getcpu.c
 --- a/sched/sched_getcpu.c
@@ -604,20 +630,21 @@ diff -u -p a/sched/sched_getcpu.c b/sched/sched_getcpu.c
  #endif
  
 -	r = __syscall(SYS_getcpu, &cpu, 0, 0);
-+	r = syscall_redirect(SYS_getcpu, &cpu, 0, 0);
++	r = syscall_redirect(SYS_getcpu, 3, (long)&cpu, (long)0, (long)0);
  	if (!r) return cpu;
  	return __syscall_ret(r);
  }
 diff -u -p a/network/setsockopt.c b/network/setsockopt.c
 --- a/network/setsockopt.c
 +++ b/network/setsockopt.c
-@@ -3,5 +3,6 @@
+@@ -3,5 +3,7 @@
  
  int setsockopt(int fd, int level, int optname, const void *optval, socklen_t optlen)
  {
 -	return socketcall(setsockopt, fd, level, optname, optval, optlen, 0);
-+	return syscall_redirect(SYS_setsockopt, fd, level, optname, optval,
-+				optlen, 0);
++	return syscall_redirect(SYS_setsockopt, 6, (long)fd, (long)level,
++				(long)optname, (long)optval, (long)optlen,
++				(long)0);
  }
 diff -u -p a/network/if_indextoname.c b/network/if_indextoname.c
 --- a/network/if_indextoname.c
@@ -627,117 +654,126 @@ diff -u -p a/network/if_indextoname.c b/network/if_indextoname.c
  	ifr.ifr_ifindex = index;
  	r = ioctl(fd, SIOCGIFNAME, &ifr);
 -	__syscall(SYS_close, fd);
-+	syscall_redirect(SYS_close, fd);
++	syscall_redirect(SYS_close, 1, (long)fd);
  	if (r < 0) {
  		if (errno == ENODEV) errno = ENXIO;
  		return 0;
 diff -u -p a/network/getsockopt.c b/network/getsockopt.c
 --- a/network/getsockopt.c
 +++ b/network/getsockopt.c
-@@ -3,5 +3,6 @@
+@@ -3,5 +3,7 @@
  
  int getsockopt(int fd, int level, int optname, void *restrict optval, socklen_t *restrict optlen)
  {
 -	return socketcall(getsockopt, fd, level, optname, optval, optlen, 0);
-+	return syscall_redirect(SYS_getsockopt, fd, level, optname, optval,
-+				optlen, 0);
++	return syscall_redirect(SYS_getsockopt, 6, (long)fd, (long)level,
++				(long)optname, (long)optval, (long)optlen,
++				(long)0);
  }
 diff -u -p a/network/bind.c b/network/bind.c
 --- a/network/bind.c
 +++ b/network/bind.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int bind(int fd, const struct sockaddr *addr, socklen_t len)
  {
 -	return socketcall(bind, fd, addr, len, 0, 0, 0);
-+	return syscall_redirect(SYS_bind, fd, addr, len, 0, 0, 0);
++	return syscall_redirect(SYS_bind, 6, (long)fd, (long)addr, (long)len,
++				(long)0, (long)0, (long)0);
  }
 diff -u -p a/network/socketpair.c b/network/socketpair.c
 --- a/network/socketpair.c
 +++ b/network/socketpair.c
-@@ -5,20 +5,25 @@
+@@ -5,20 +5,26 @@
  
  int socketpair(int domain, int type, int protocol, int fd[2])
  {
 -	int r = socketcall(socketpair, domain, type, protocol, fd, 0, 0);
-+	int r = syscall_redirect(SYS_socketpair, domain, type, protocol, fd,
-+				 0, 0);
++	int r = syscall_redirect(SYS_socketpair, 6, (long)domain, (long)type,
++				 (long)protocol, (long)fd, (long)0, (long)0);
  	if (r<0 && (errno==EINVAL || errno==EPROTONOSUPPORT)
  	    && (type&(SOCK_CLOEXEC|SOCK_NONBLOCK))) {
 -		r = socketcall(socketpair, domain,
 -			type & ~(SOCK_CLOEXEC|SOCK_NONBLOCK),
 -			protocol, fd, 0, 0);
-+		r = syscall_redirect(SYS_socketpair, domain,
-+				     type & ~(SOCK_CLOEXEC | SOCK_NONBLOCK),
-+				     protocol, fd, 0, 0);
++		r = syscall_redirect(SYS_socketpair, 6, (long)domain,
++				     (long)(type & ~(SOCK_CLOEXEC | SOCK_NONBLOCK)),
++				     (long)protocol, (long)fd, (long)0,
++				     (long)0);
  		if (r < 0) return r;
  		if (type & SOCK_CLOEXEC) {
 -			__syscall(SYS_fcntl, fd[0], F_SETFD, FD_CLOEXEC);
 -			__syscall(SYS_fcntl, fd[1], F_SETFD, FD_CLOEXEC);
-+			syscall_redirect(SYS_fcntl, fd[0], F_SETFD,
-+					 FD_CLOEXEC);
-+			syscall_redirect(SYS_fcntl, fd[1], F_SETFD,
-+					 FD_CLOEXEC);
++			syscall_redirect(SYS_fcntl, 3, (long)fd[0],
++					 (long)F_SETFD, (long)FD_CLOEXEC);
++			syscall_redirect(SYS_fcntl, 3, (long)fd[1],
++					 (long)F_SETFD, (long)FD_CLOEXEC);
  		}
  		if (type & SOCK_NONBLOCK) {
 -			__syscall(SYS_fcntl, fd[0], F_SETFL, O_NONBLOCK);
 -			__syscall(SYS_fcntl, fd[1], F_SETFL, O_NONBLOCK);
-+			syscall_redirect(SYS_fcntl, fd[0], F_SETFL,
-+					 O_NONBLOCK);
-+			syscall_redirect(SYS_fcntl, fd[1], F_SETFL,
-+					 O_NONBLOCK);
++			syscall_redirect(SYS_fcntl, 3, (long)fd[0],
++					 (long)F_SETFL, (long)O_NONBLOCK);
++			syscall_redirect(SYS_fcntl, 3, (long)fd[1],
++					 (long)F_SETFL, (long)O_NONBLOCK);
  		}
  	}
  	return r;
 diff -u -p a/network/accept4.c b/network/accept4.c
 --- a/network/accept4.c
 +++ b/network/accept4.c
-@@ -8,13 +8,13 @@
+@@ -8,13 +8,16 @@
  int accept4(int fd, struct sockaddr *restrict addr, socklen_t *restrict len, int flg)
  {
  	if (!flg) return accept(fd, addr, len);
 -	int ret = socketcall_cp(accept4, fd, addr, len, flg, 0, 0);
-+	int ret = syscall_redirect(SYS_accept4, fd, addr, len, flg, 0, 0);
++	int ret = syscall_redirect(SYS_accept4, 6, (long)fd, (long)addr,
++				   (long)len, (long)flg, (long)0, (long)0);
  	if (ret>=0 || (errno != ENOSYS && errno != EINVAL)) return ret;
  	ret = accept(fd, addr, len);
  	if (ret<0) return ret;
  	if (flg & SOCK_CLOEXEC)
 -		__syscall(SYS_fcntl, ret, F_SETFD, FD_CLOEXEC);
-+		syscall_redirect(SYS_fcntl, ret, F_SETFD, FD_CLOEXEC);
++		syscall_redirect(SYS_fcntl, 3, (long)ret, (long)F_SETFD,
++				 (long)FD_CLOEXEC);
  	if (flg & SOCK_NONBLOCK)
 -		__syscall(SYS_fcntl, ret, F_SETFL, O_NONBLOCK);
-+		syscall_redirect(SYS_fcntl, ret, F_SETFL, O_NONBLOCK);
++		syscall_redirect(SYS_fcntl, 3, (long)ret, (long)F_SETFL,
++				 (long)O_NONBLOCK);
  	return ret;
  }
 diff -u -p a/network/sendto.c b/network/sendto.c
 --- a/network/sendto.c
 +++ b/network/sendto.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  ssize_t sendto(int fd, const void *buf, size_t len, int flags, const struct sockaddr *addr, socklen_t alen)
  {
 -	return socketcall_cp(sendto, fd, buf, len, flags, addr, alen);
-+	return syscall_redirect(SYS_sendto, fd, buf, len, flags, addr, alen);
++	return syscall_redirect(SYS_sendto, 6, (long)fd, (long)buf, (long)len,
++				(long)flags, (long)addr, (long)alen);
  }
 diff -u -p a/network/listen.c b/network/listen.c
 --- a/network/listen.c
 +++ b/network/listen.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int listen(int fd, int backlog)
  {
 -	return socketcall(listen, fd, backlog, 0, 0, 0, 0);
-+	return syscall_redirect(SYS_listen, fd, backlog, 0, 0, 0, 0);
++	return syscall_redirect(SYS_listen, 6, (long)fd, (long)backlog,
++				(long)0, (long)0, (long)0, (long)0);
  }
 diff -u -p a/network/connect.c b/network/connect.c
 --- a/network/connect.c
 +++ b/network/connect.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  int connect(int fd, const struct sockaddr *addr, socklen_t len)
  {
 -	return socketcall_cp(connect, fd, addr, len, 0, 0, 0);
-+	return syscall_redirect(SYS_connect, fd, addr, len, 0, 0, 0);
++	return syscall_redirect(SYS_connect, 6, (long)fd, (long)addr,
++				(long)len, (long)0, (long)0, (long)0);
  }
 diff -u -p a/network/if_nametoindex.c b/network/if_nametoindex.c
 --- a/network/if_nametoindex.c
@@ -747,7 +783,7 @@ diff -u -p a/network/if_nametoindex.c b/network/if_nametoindex.c
  	strncpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
  	r = ioctl(fd, SIOCGIFINDEX, &ifr);
 -	__syscall(SYS_close, fd);
-+	syscall_redirect(SYS_close, fd);
++	syscall_redirect(SYS_close, 1, (long)fd);
  	return r < 0 ? 0 : ifr.ifr_ifindex;
  }
 diff -u -p a/network/netlink.c b/network/netlink.c
@@ -758,107 +794,119 @@ diff -u -p a/network/netlink.c b/network/netlink.c
  	r = __netlink_enumerate(fd, 1, RTM_GETLINK, link_af, cb, ctx);
  	if (!r) r = __netlink_enumerate(fd, 2, RTM_GETADDR, addr_af, cb, ctx);
 -	__syscall(SYS_close,fd);
-+	syscall_redirect(SYS_close, fd);
++	syscall_redirect(SYS_close, 1, (long)fd);
  	return r;
  }
 diff -u -p a/network/recvfrom.c b/network/recvfrom.c
 --- a/network/recvfrom.c
 +++ b/network/recvfrom.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,7 @@
  
  ssize_t recvfrom(int fd, void *restrict buf, size_t len, int flags, struct sockaddr *restrict addr, socklen_t *restrict alen)
  {
 -	return socketcall_cp(recvfrom, fd, buf, len, flags, addr, alen);
-+	return syscall_redirect(SYS_recvfrom, fd, buf, len, flags, addr, alen);
++	return syscall_redirect(SYS_recvfrom, 6, (long)fd, (long)buf,
++				(long)len, (long)flags, (long)addr,
++				(long)alen);
  }
 diff -u -p a/network/recvmsg.c b/network/recvmsg.c
 --- a/network/recvmsg.c
 +++ b/network/recvmsg.c
-@@ -14,7 +14,7 @@ ssize_t recvmsg(int fd, struct msghdr *m
+@@ -14,7 +14,8 @@ ssize_t recvmsg(int fd, struct msghdr *m
  		msg = &h;
  	}
  #endif
 -	r = socketcall_cp(recvmsg, fd, msg, flags, 0, 0, 0);
-+	r = syscall_redirect(SYS_recvmsg, fd, msg, flags, 0, 0, 0);
++	r = syscall_redirect(SYS_recvmsg, 6, (long)fd, (long)msg, (long)flags,
++			     (long)0, (long)0, (long)0);
  #if LONG_MAX > INT_MAX
  	if (orig) *orig = h;
  #endif
 diff -u -p a/network/getsockname.c b/network/getsockname.c
 --- a/network/getsockname.c
 +++ b/network/getsockname.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int getsockname(int fd, struct sockaddr *restrict addr, socklen_t *restrict len)
  {
 -	return socketcall(getsockname, fd, addr, len, 0, 0, 0);
-+	return syscall_redirect(SYS_getsockname, fd, addr, len, 0, 0, 0);
++	return syscall_redirect(SYS_getsockname, 6, (long)fd, (long)addr,
++				(long)len, (long)0, (long)0, (long)0);
  }
 diff -u -p a/network/sendmsg.c b/network/sendmsg.c
 --- a/network/sendmsg.c
 +++ b/network/sendmsg.c
-@@ -26,5 +26,5 @@ ssize_t sendmsg(int fd, const struct msg
+@@ -26,5 +26,6 @@ ssize_t sendmsg(int fd, const struct msg
  		}
  	}
  #endif
 -	return socketcall_cp(sendmsg, fd, msg, flags, 0, 0, 0);
-+	return syscall_redirect(SYS_sendmsg, fd, msg, flags, 0, 0, 0);
++	return syscall_redirect(SYS_sendmsg, 6, (long)fd, (long)msg,
++				(long)flags, (long)0, (long)0, (long)0);
  }
 diff -u -p a/network/socket.c b/network/socket.c
 --- a/network/socket.c
 +++ b/network/socket.c
-@@ -5,17 +5,17 @@
+@@ -5,17 +5,21 @@
  
  int socket(int domain, int type, int protocol)
  {
 -	int s = socketcall(socket, domain, type, protocol, 0, 0, 0);
-+	int s = syscall_redirect(SYS_socket, domain, type, protocol, 0, 0, 0);
++	int s = syscall_redirect(SYS_socket, 6, (long)domain, (long)type,
++				 (long)protocol, (long)0, (long)0, (long)0);
  	if (s<0 && (errno==EINVAL || errno==EPROTONOSUPPORT)
  	    && (type&(SOCK_CLOEXEC|SOCK_NONBLOCK))) {
 -		s = socketcall(socket, domain,
 -			type & ~(SOCK_CLOEXEC|SOCK_NONBLOCK),
 -			protocol, 0, 0, 0);
-+		s = syscall_redirect(SYS_socket, domain,
-+				     type & ~(SOCK_CLOEXEC | SOCK_NONBLOCK),
-+				     protocol, 0, 0, 0);
++		s = syscall_redirect(SYS_socket, 6, (long)domain,
++				     (long)(type & ~(SOCK_CLOEXEC | SOCK_NONBLOCK)),
++				     (long)protocol, (long)0, (long)0,
++				     (long)0);
  		if (s < 0) return s;
  		if (type & SOCK_CLOEXEC)
 -			__syscall(SYS_fcntl, s, F_SETFD, FD_CLOEXEC);
-+			syscall_redirect(SYS_fcntl, s, F_SETFD, FD_CLOEXEC);
++			syscall_redirect(SYS_fcntl, 3, (long)s, (long)F_SETFD,
++					 (long)FD_CLOEXEC);
  		if (type & SOCK_NONBLOCK)
 -			__syscall(SYS_fcntl, s, F_SETFL, O_NONBLOCK);
-+			syscall_redirect(SYS_fcntl, s, F_SETFL, O_NONBLOCK);
++			syscall_redirect(SYS_fcntl, 3, (long)s, (long)F_SETFL,
++					 (long)O_NONBLOCK);
  	}
  	return s;
  }
 diff -u -p a/network/accept.c b/network/accept.c
 --- a/network/accept.c
 +++ b/network/accept.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  int accept(int fd, struct sockaddr *restrict addr, socklen_t *restrict len)
  {
 -	return socketcall_cp(accept, fd, addr, len, 0, 0, 0);
-+	return syscall_redirect(SYS_accept, fd, addr, len, 0, 0, 0);
++	return syscall_redirect(SYS_accept, 6, (long)fd, (long)addr,
++				(long)len, (long)0, (long)0, (long)0);
  }
 diff -u -p a/network/getpeername.c b/network/getpeername.c
 --- a/network/getpeername.c
 +++ b/network/getpeername.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int getpeername(int fd, struct sockaddr *restrict addr, socklen_t *restrict len)
  {
 -	return socketcall(getpeername, fd, addr, len, 0, 0, 0);
-+	return syscall_redirect(SYS_getpeername, fd, addr, len, 0, 0, 0);
++	return syscall_redirect(SYS_getpeername, 6, (long)fd, (long)addr,
++				(long)len, (long)0, (long)0, (long)0);
  }
 diff -u -p a/network/shutdown.c b/network/shutdown.c
 --- a/network/shutdown.c
 +++ b/network/shutdown.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int shutdown(int fd, int how)
  {
 -	return socketcall(shutdown, fd, how, 0, 0, 0, 0);
-+	return syscall_redirect(SYS_shutdown, fd, how, 0, 0, 0, 0);
++	return syscall_redirect(SYS_shutdown, 6, (long)fd, (long)how, (long)0,
++				(long)0, (long)0, (long)0);
  }
 diff -u -p a/network/recvmmsg.c b/network/recvmmsg.c
 --- a/network/recvmmsg.c
@@ -868,8 +916,8 @@ diff -u -p a/network/recvmmsg.c b/network/recvmmsg.c
  		mh->msg_hdr.__pad1 = mh->msg_hdr.__pad2 = 0;
  #endif
 -	return syscall_cp(SYS_recvmmsg, fd, msgvec, vlen, flags, timeout);
-+	return syscall_redirect(SYS_recvmmsg, fd, msgvec, vlen, flags,
-+				timeout);
++	return syscall_redirect(SYS_recvmmsg, 5, (long)fd, (long)msgvec,
++				(long)vlen, (long)flags, (long)timeout);
  }
 diff -u -p a/network/res_msend.c b/network/res_msend.c
 --- a/network/res_msend.c
@@ -879,19 +927,20 @@ diff -u -p a/network/res_msend.c b/network/res_msend.c
  static void cleanup(void *p)
  {
 -	__syscall(SYS_close, (intptr_t)p);
-+	syscall_redirect(SYS_close, (intptr_t)p);
++	syscall_redirect(SYS_close, 1, (long)(intptr_t)p);
  }
  
  static unsigned long mtime()
 diff -u -p a/network/sendmmsg.c b/network/sendmmsg.c
 --- a/network/sendmmsg.c
 +++ b/network/sendmmsg.c
-@@ -25,6 +25,6 @@ int sendmmsg(int fd, struct mmsghdr *msg
+@@ -25,6 +25,7 @@ int sendmmsg(int fd, struct mmsghdr *msg
  error:
  	return i ? i : -1;
  #else
 -	return syscall_cp(SYS_sendmmsg, fd, msgvec, vlen, flags);
-+	return syscall_redirect(SYS_sendmmsg, fd, msgvec, vlen, flags);
++	return syscall_redirect(SYS_sendmmsg, 4, (long)fd, (long)msgvec,
++				(long)vlen, (long)flags);
  #endif
  }
 diff -u -p a/malloc/expand_heap.c b/malloc/expand_heap.c
@@ -902,7 +951,7 @@ diff -u -p a/malloc/expand_heap.c b/malloc/expand_heap.c
  
  	if (!brk) {
 -		brk = __syscall(SYS_brk, 0);
-+		brk = syscall_redirect(SYS_brk, 0);
++		brk = syscall_redirect(SYS_brk, 1, (long)0);
  		brk += -brk & PAGE_SIZE-1;
  	}
  
@@ -910,7 +959,7 @@ diff -u -p a/malloc/expand_heap.c b/malloc/expand_heap.c
  	uint64_t start = rdtsc();
  #endif /* MEASURE_BRK_TIME */
 -	int ret = __syscall(SYS_brk, brk+n);
-+	int ret = syscall_redirect(SYS_brk, brk + n);
++	int ret = syscall_redirect(SYS_brk, 1, (long)(brk + n));
  #ifdef MEASURE_BRK_TIME
  	uint64_t stop = rdtsc();
  	printf("brk lat: %llu\n", stop - start);
@@ -922,93 +971,100 @@ diff -u -p a/malloc/__brk.c b/malloc/__brk.c
  uintptr_t __brk(uintptr_t newbrk)
  {
 -	return __syscall(SYS_brk, newbrk);
-+	return syscall_redirect(SYS_brk, newbrk);
++	return syscall_redirect(SYS_brk, 1, (long)newbrk);
  }
 diff -u -p a/conf/sysconf.c b/conf/sysconf.c
 --- a/conf/sysconf.c
 +++ b/conf/sysconf.c
-@@ -194,7 +194,7 @@ long sysconf(int name)
+@@ -194,7 +194,8 @@ long sysconf(int name)
  	case JT_NPROCESSORS_ONLN & 255: ;
  		unsigned char set[128] = {1};
  		int i, cnt;
 -		__syscall(SYS_sched_getaffinity, 0, sizeof set, set);
-+		syscall_redirect(SYS_sched_getaffinity, 0, sizeof set, set);
++		syscall_redirect(SYS_sched_getaffinity, 3, (long)0,
++				 (long)sizeof set, (long)set);
  		for (i=cnt=0; i<sizeof set; i++)
  			for (; set[i]; set[i]&=set[i]-1, cnt++);
  		return cnt;
 diff -u -p a/select/poll.c b/select/poll.c
 --- a/select/poll.c
 +++ b/select/poll.c
-@@ -7,10 +7,11 @@
+@@ -7,10 +7,12 @@
  int poll(struct pollfd *fds, nfds_t n, int timeout)
  {
  #ifdef SYS_poll
 -	return syscall_cp(SYS_poll, fds, n, timeout);
-+	return syscall_redirect(SYS_poll, fds, n, timeout);
++	return syscall_redirect(SYS_poll, 3, (long)fds, (long)n,
++				(long)timeout);
  #else
 -	return syscall_cp(SYS_ppoll, fds, n, timeout>=0 ?
 -		&((struct timespec){ .tv_sec = timeout/1000,
 -		.tv_nsec = timeout%1000*1000000 }) : 0, 0, _NSIG/8);
-+	return syscall_redirect(SYS_ppoll, fds, n, timeout >= 0 ? &((struct timespec){
-+				.tv_sec=timeout / 1000,
-+				.tv_nsec=timeout % 1000 * 1000000,
-+			}) : 0, 0, _NSIG / 8);
++	return syscall_redirect(SYS_ppoll, 5, (long)fds, (long)n, (long)(timeout >= 0 ? &((struct timespec){
++					.tv_sec=timeout / 1000,
++					.tv_nsec=timeout % 1000 * 1000000,
++				}) : 0), (long)0, (long)(_NSIG / 8));
  #endif
  }
 diff -u -p a/select/pselect.c b/select/pselect.c
 --- a/select/pselect.c
 +++ b/select/pselect.c
-@@ -9,5 +9,6 @@ int pselect(int n, fd_set *restrict rfds
+@@ -9,5 +9,7 @@ int pselect(int n, fd_set *restrict rfds
  	syscall_arg_t data[2] = { (uintptr_t)mask, _NSIG/8 };
  	struct timespec ts_tmp;
  	if (ts) ts_tmp = *ts;
 -	return syscall_cp(SYS_pselect6, n, rfds, wfds, efds, ts ? &ts_tmp : 0, data);
-+	return syscall_redirect(SYS_pselect6, n, rfds, wfds, efds,
-+				ts ? &ts_tmp : 0, data);
++	return syscall_redirect(SYS_pselect6, 6, (long)n, (long)rfds,
++				(long)wfds, (long)efds,
++				(long)(ts ? &ts_tmp : 0), (long)data);
  }
 diff -u -p a/select/select.c b/select/select.c
 --- a/select/select.c
 +++ b/select/select.c
-@@ -8,7 +8,7 @@
+@@ -8,7 +8,8 @@
  int select(int n, fd_set *restrict rfds, fd_set *restrict wfds, fd_set *restrict efds, struct timeval *restrict tv)
  {
  #ifdef SYS_select
 -	return syscall_cp(SYS_select, n, rfds, wfds, efds, tv);
-+	return syscall_redirect(SYS_select, n, rfds, wfds, efds, tv);
++	return syscall_redirect(SYS_select, 5, (long)n, (long)rfds,
++				(long)wfds, (long)efds, (long)tv);
  #else
  	syscall_arg_t data[2] = { 0, _NSIG/8 };
  	struct timespec ts;
-@@ -21,6 +21,7 @@ int select(int n, fd_set *restrict rfds,
+@@ -21,6 +22,8 @@ int select(int n, fd_set *restrict rfds,
  		ts.tv_sec = extra_secs > max_time - tv->tv_sec ?
  			max_time : tv->tv_sec + extra_secs;
  	}
 -	return syscall_cp(SYS_pselect6, n, rfds, wfds, efds, tv ? &ts : 0, data);
-+	return syscall_redirect(SYS_pselect6, n, rfds, wfds, efds,
-+				tv ? &ts : 0, data);
++	return syscall_redirect(SYS_pselect6, 6, (long)n, (long)rfds,
++				(long)wfds, (long)efds, (long)(tv ? &ts : 0),
++				(long)data);
  #endif
  }
 diff -u -p a/dirent/readdir.c b/dirent/readdir.c
 --- a/dirent/readdir.c
 +++ b/dirent/readdir.c
-@@ -11,7 +11,8 @@ struct dirent *readdir(DIR *dir)
+@@ -11,7 +11,9 @@ struct dirent *readdir(DIR *dir)
  	struct dirent *de;
  	
  	if (dir->buf_pos >= dir->buf_end) {
 -		int len = __syscall(SYS_getdents, dir->fd, dir->buf, sizeof dir->buf);
-+		int len = syscall_redirect(SYS_getdents, dir->fd, dir->buf,
-+					   sizeof dir->buf);
++		int len = syscall_redirect(SYS_getdents, 3, (long)dir->fd,
++					   (long)dir->buf,
++					   (long)sizeof dir->buf);
  		if (len <= 0) {
  			if (len < 0 && len != -ENOENT) errno = -len;
  			return 0;
 diff -u -p a/dirent/__getdents.c b/dirent/__getdents.c
 --- a/dirent/__getdents.c
 +++ b/dirent/__getdents.c
-@@ -4,7 +4,7 @@
+@@ -4,7 +4,8 @@
  
  int __getdents(int fd, struct dirent *buf, size_t len)
  {
 -	return syscall(SYS_getdents, fd, buf, len);
-+	return syscall_redirect(SYS_getdents, fd, buf, len);
++	return syscall_redirect(SYS_getdents, 3, (long)fd, (long)buf,
++				(long)len);
  }
  
  weak_alias(__getdents, getdents);
@@ -1020,7 +1076,7 @@ diff -u -p a/dirent/opendir.c b/dirent/opendir.c
  		return 0;
  	if (!(dir = calloc(1, sizeof *dir))) {
 -		__syscall(SYS_close, fd);
-+		syscall_redirect(SYS_close, fd);
++		syscall_redirect(SYS_close, 1, (long)fd);
  		return 0;
  	}
  	dir->fd = fd;
@@ -1032,113 +1088,129 @@ diff -u -p a/fcntl/openat.c b/fcntl/openat.c
  	}
  
 -	return syscall_cp(SYS_openat, fd, filename, flags|O_LARGEFILE, mode);
-+	return syscall_redirect(SYS_openat, fd, filename, flags | O_LARGEFILE,
-+				mode);
++	return syscall_redirect(SYS_openat, 4, (long)fd, (long)filename,
++				(long)(flags | O_LARGEFILE), (long)mode);
  }
  
  LFS64(openat);
 diff -u -p a/fcntl/posix_fadvise.c b/fcntl/posix_fadvise.c
 --- a/fcntl/posix_fadvise.c
 +++ b/fcntl/posix_fadvise.c
-@@ -8,11 +8,11 @@ int posix_fadvise(int fd, off_t base, of
+@@ -8,11 +8,13 @@ int posix_fadvise(int fd, off_t base, of
  	/* Some archs, at least arm and powerpc, have the syscall
  	 * arguments reordered to avoid needing 7 argument registers
  	 * due to 64-bit argument alignment. */
 -	return -__syscall(SYS_fadvise, fd, advice,
 -		__SYSCALL_LL_E(base), __SYSCALL_LL_E(len));
-+	return -syscall_redirect(SYS_fadvise, fd, advice,
-+				 __SYSCALL_LL_E(base), __SYSCALL_LL_E(len));
++	return -syscall_redirect(SYS_fadvise, 4, (long)fd, (long)advice,
++				 (long)__SYSCALL_LL_E(base),
++				 (long)__SYSCALL_LL_E(len));
  #else
 -	return -__syscall(SYS_fadvise, fd, __SYSCALL_LL_O(base),
 -		__SYSCALL_LL_E(len), advice);
-+	return -syscall_redirect(SYS_fadvise, fd, __SYSCALL_LL_O(base),
-+				 __SYSCALL_LL_E(len), advice);
++	return -syscall_redirect(SYS_fadvise, 4, (long)fd,
++				 (long)__SYSCALL_LL_O(base),
++				 (long)__SYSCALL_LL_E(len), (long)advice);
  #endif
  }
  
 diff -u -p a/fcntl/fcntl.c b/fcntl/fcntl.c
 --- a/fcntl/fcntl.c
 +++ b/fcntl/fcntl.c
-@@ -13,28 +13,33 @@ int fcntl(int fd, int cmd, ...)
+@@ -13,28 +13,42 @@ int fcntl(int fd, int cmd, ...)
  	arg = va_arg(ap, unsigned long);
  	va_end(ap);
  	if (cmd == F_SETFL) arg |= O_LARGEFILE;
 -	if (cmd == F_SETLKW) return syscall_cp(SYS_fcntl, fd, cmd, (void *)arg);
-+	if (cmd == F_SETLKW) return syscall_redirect(SYS_fcntl, fd, cmd,
-+						     (void *)arg);
++	if (cmd == F_SETLKW) return syscall_redirect(SYS_fcntl, 3, (long)fd,
++						     (long)cmd,
++						     (long)(void *)arg);
  	if (cmd == F_GETOWN) {
  		struct f_owner_ex ex;
 -		int ret = __syscall(SYS_fcntl, fd, F_GETOWN_EX, &ex);
 -		if (ret == -EINVAL) return __syscall(SYS_fcntl, fd, cmd, (void *)arg);
-+		int ret = syscall_redirect(SYS_fcntl, fd, F_GETOWN_EX, &ex);
-+		if (ret == -EINVAL) return syscall_redirect(SYS_fcntl, fd,
-+							    cmd, (void *)arg);
++		int ret = syscall_redirect(SYS_fcntl, 3, (long)fd,
++					   (long)F_GETOWN_EX, (long)&ex);
++		if (ret == -EINVAL) return syscall_redirect(SYS_fcntl, 3,
++							    (long)fd,
++							    (long)cmd,
++							    (long)(void *)arg);
  		if (ret) return __syscall_ret(ret);
  		return ex.type == F_OWNER_PGRP ? -ex.pid : ex.pid;
  	}
  	if (cmd == F_DUPFD_CLOEXEC) {
 -		int ret = __syscall(SYS_fcntl, fd, F_DUPFD_CLOEXEC, arg);
-+		int ret = syscall_redirect(SYS_fcntl, fd, F_DUPFD_CLOEXEC,
-+					   arg);
++		int ret = syscall_redirect(SYS_fcntl, 3, (long)fd,
++					   (long)F_DUPFD_CLOEXEC, (long)arg);
  		if (ret != -EINVAL) {
  			if (ret >= 0)
 -				__syscall(SYS_fcntl, ret, F_SETFD, FD_CLOEXEC);
-+				syscall_redirect(SYS_fcntl, ret, F_SETFD,
-+						 FD_CLOEXEC);
++				syscall_redirect(SYS_fcntl, 3, (long)ret,
++						 (long)F_SETFD,
++						 (long)FD_CLOEXEC);
  			return __syscall_ret(ret);
  		}
 -		ret = __syscall(SYS_fcntl, fd, F_DUPFD_CLOEXEC, 0);
-+		ret = syscall_redirect(SYS_fcntl, fd, F_DUPFD_CLOEXEC, 0);
++		ret = syscall_redirect(SYS_fcntl, 3, (long)fd,
++				       (long)F_DUPFD_CLOEXEC, (long)0);
  		if (ret != -EINVAL) {
 -			if (ret >= 0) __syscall(SYS_close, ret);
-+			if (ret >= 0) syscall_redirect(SYS_close, ret);
++			if (ret >= 0) syscall_redirect(SYS_close, 1,
++						       (long)ret);
  			return __syscall_ret(-EINVAL);
  		}
 -		ret = __syscall(SYS_fcntl, fd, F_DUPFD, arg);
 -		if (ret >= 0) __syscall(SYS_fcntl, ret, F_SETFD, FD_CLOEXEC);
-+		ret = syscall_redirect(SYS_fcntl, fd, F_DUPFD, arg);
-+		if (ret >= 0) syscall_redirect(SYS_fcntl, ret, F_SETFD,
-+					       FD_CLOEXEC);
++		ret = syscall_redirect(SYS_fcntl, 3, (long)fd, (long)F_DUPFD,
++				       (long)arg);
++		if (ret >= 0) syscall_redirect(SYS_fcntl, 3, (long)ret,
++					       (long)F_SETFD,
++					       (long)FD_CLOEXEC);
  		return __syscall_ret(ret);
  	}
  	switch (cmd) {
-@@ -42,8 +47,8 @@ int fcntl(int fd, int cmd, ...)
+@@ -42,8 +56,10 @@ int fcntl(int fd, int cmd, ...)
  	case F_GETLK:
  	case F_GETOWN_EX:
  	case F_SETOWN_EX:
 -		return syscall(SYS_fcntl, fd, cmd, (void *)arg);
-+		return syscall_redirect(SYS_fcntl, fd, cmd, (void *)arg);
++		return syscall_redirect(SYS_fcntl, 3, (long)fd, (long)cmd,
++					(long)(void *)arg);
  	default:
 -		return syscall(SYS_fcntl, fd, cmd, arg);
-+		return syscall_redirect(SYS_fcntl, fd, cmd, arg);
++		return syscall_redirect(SYS_fcntl, 3, (long)fd, (long)cmd,
++					(long)arg);
  	}
  }
 diff -u -p a/fcntl/open.c b/fcntl/open.c
 --- a/fcntl/open.c
 +++ b/fcntl/open.c
-@@ -14,9 +14,9 @@ int open(const char *filename, int flags
+@@ -14,9 +14,11 @@ int open(const char *filename, int flags
  		va_end(ap);
  	}
  
 -	int fd = __sys_open_cp(filename, flags, mode);
-+	int fd = syscall_redirect(SYS_open, flags, (mode) | O_LARGEFILE);
++	int fd = syscall_redirect(SYS_open, 3, (long)filename, (long)flags,
++				  (long)((mode) | O_LARGEFILE));
  	if (fd>=0 && (flags & O_CLOEXEC))
 -		__syscall(SYS_fcntl, fd, F_SETFD, FD_CLOEXEC);
-+		syscall_redirect(SYS_fcntl, fd, F_SETFD, FD_CLOEXEC);
++		syscall_redirect(SYS_fcntl, 3, (long)fd, (long)F_SETFD,
++				 (long)FD_CLOEXEC);
  
  	return __syscall_ret(fd);
  }
 diff -u -p a/fcntl/posix_fallocate.c b/fcntl/posix_fallocate.c
 --- a/fcntl/posix_fallocate.c
 +++ b/fcntl/posix_fallocate.c
-@@ -4,8 +4,8 @@
+@@ -4,8 +4,9 @@
  
  int posix_fallocate(int fd, off_t base, off_t len)
  {
 -	return -__syscall(SYS_fallocate, fd, 0, __SYSCALL_LL_E(base),
 -		__SYSCALL_LL_E(len));
-+	return -syscall_redirect(SYS_fallocate, fd, 0, __SYSCALL_LL_E(base),
-+				 __SYSCALL_LL_E(len));
++	return -syscall_redirect(SYS_fallocate, 4, (long)fd, (long)0,
++				 (long)__SYSCALL_LL_E(base),
++				 (long)__SYSCALL_LL_E(len));
  }
  
  LFS64(posix_fallocate);
@@ -1150,82 +1222,91 @@ diff -u -p a/termios/tcdrain.c b/termios/tcdrain.c
  int tcdrain(int fd)
  {
 -	return syscall_cp(SYS_ioctl, fd, TCSBRK, 1);
-+	return syscall_redirect(SYS_ioctl, fd, TCSBRK, 1);
++	return syscall_redirect(SYS_ioctl, 3, (long)fd, (long)TCSBRK, (long)1);
  }
 diff -u -p a/ipc/shmget.c b/ipc/shmget.c
 --- a/ipc/shmget.c
 +++ b/ipc/shmget.c
-@@ -7,8 +7,8 @@ int shmget(key_t key, size_t size, int f
+@@ -7,8 +7,10 @@ int shmget(key_t key, size_t size, int f
  {
  	if (size > PTRDIFF_MAX) size = SIZE_MAX;
  #ifdef SYS_shmget
 -	return syscall(SYS_shmget, key, size, flag);
-+	return syscall_redirect(SYS_shmget, key, size, flag);
++	return syscall_redirect(SYS_shmget, 3, (long)key, (long)size,
++				(long)flag);
  #else
 -	return syscall(SYS_ipc, IPCOP_shmget, key, size, flag);
-+	return syscall_redirect(SYS_ipc, IPCOP_shmget, key, size, flag);
++	return syscall_redirect(SYS_ipc, 4, (long)IPCOP_shmget, (long)key,
++				(long)size, (long)flag);
  #endif
  }
 diff -u -p a/ipc/msgctl.c b/ipc/msgctl.c
 --- a/ipc/msgctl.c
 +++ b/ipc/msgctl.c
-@@ -5,8 +5,9 @@
+@@ -5,8 +5,11 @@
  int msgctl(int q, int cmd, struct msqid_ds *buf)
  {
  #ifdef SYS_msgctl
 -	return syscall(SYS_msgctl, q, cmd | IPC_64, buf);
-+	return syscall_redirect(SYS_msgctl, q, cmd | IPC_64, buf);
++	return syscall_redirect(SYS_msgctl, 3, (long)q, (long)(cmd | IPC_64),
++				(long)buf);
  #else
 -	return syscall(SYS_ipc, IPCOP_msgctl, q, cmd | IPC_64, 0, buf, 0);
-+	return syscall_redirect(SYS_ipc, IPCOP_msgctl, q, cmd | IPC_64, 0,
-+				buf, 0);
++	return syscall_redirect(SYS_ipc, 6, (long)IPCOP_msgctl, (long)q,
++				(long)(cmd | IPC_64), (long)0, (long)buf,
++				(long)0);
  #endif
  }
 diff -u -p a/ipc/shmat.c b/ipc/shmat.c
 --- a/ipc/shmat.c
 +++ b/ipc/shmat.c
-@@ -5,13 +5,13 @@
+@@ -5,13 +5,15 @@
  #ifdef SYS_shmat
  void *shmat(int id, const void *addr, int flag)
  {
 -	return (void *)syscall(SYS_shmat, id, addr, flag);
-+	return (void *)syscall_redirect(SYS_shmat, id, addr, flag);
++	return (void *)syscall_redirect(SYS_shmat, 3, (long)id, (long)addr,
++					(long)flag);
  }
  #else
  void *shmat(int id, const void *addr, int flag)
  {
  	unsigned long ret;
 -	ret = syscall(SYS_ipc, IPCOP_shmat, id, flag, &addr, addr);
-+	ret = syscall_redirect(SYS_ipc, IPCOP_shmat, id, flag, &addr, addr);
++	ret = syscall_redirect(SYS_ipc, 5, (long)IPCOP_shmat, (long)id,
++			       (long)flag, (long)&addr, (long)addr);
  	return (ret > -(unsigned long)SHMLBA) ? (void *)ret : (void *)addr;
  }
  #endif
 diff -u -p a/ipc/shmdt.c b/ipc/shmdt.c
 --- a/ipc/shmdt.c
 +++ b/ipc/shmdt.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  int shmdt(const void *addr)
  {
  #ifdef SYS_shmdt
 -	return syscall(SYS_shmdt, addr);
-+	return syscall_redirect(SYS_shmdt, addr);
++	return syscall_redirect(SYS_shmdt, 1, (long)addr);
  #else
 -	return syscall(SYS_ipc, IPCOP_shmdt, 0, 0, 0, addr);
-+	return syscall_redirect(SYS_ipc, IPCOP_shmdt, 0, 0, 0, addr);
++	return syscall_redirect(SYS_ipc, 5, (long)IPCOP_shmdt, (long)0,
++				(long)0, (long)0, (long)addr);
  #endif
  }
 diff -u -p a/ipc/msgrcv.c b/ipc/msgrcv.c
 --- a/ipc/msgrcv.c
 +++ b/ipc/msgrcv.c
-@@ -6,8 +6,11 @@
+@@ -6,8 +6,13 @@
  ssize_t msgrcv(int q, void *m, size_t len, long type, int flag)
  {
  #ifdef SYS_msgrcv
 -	return syscall_cp(SYS_msgrcv, q, m, len, type, flag);
-+	return syscall_redirect(SYS_msgrcv, q, m, len, type, flag);
++	return syscall_redirect(SYS_msgrcv, 5, (long)q, (long)m, (long)len,
++				(long)type, (long)flag);
  #else
 -	return syscall_cp(SYS_ipc, IPCOP_msgrcv, q, len, flag, ((long[]){ (long)m, type }));
-+	return syscall_redirect(SYS_ipc, IPCOP_msgrcv, q, len, flag, ((long[]){
++	return syscall_redirect(SYS_ipc, 5, (long)IPCOP_msgrcv, (long)q,
++				(long)len, (long)flag, (long)((long[]){
 +				(long)m,
 +				type,
 +			}));
@@ -1234,112 +1315,124 @@ diff -u -p a/ipc/msgrcv.c b/ipc/msgrcv.c
 diff -u -p a/ipc/semget.c b/ipc/semget.c
 --- a/ipc/semget.c
 +++ b/ipc/semget.c
-@@ -12,8 +12,8 @@ int semget(key_t key, int n, int fl)
+@@ -12,8 +12,9 @@ int semget(key_t key, int n, int fl)
  	 * we have to check here. */
  	if (n > USHRT_MAX) return __syscall_ret(-EINVAL);
  #ifdef SYS_semget
 -	return syscall(SYS_semget, key, n, fl);
-+	return syscall_redirect(SYS_semget, key, n, fl);
++	return syscall_redirect(SYS_semget, 3, (long)key, (long)n, (long)fl);
  #else
 -	return syscall(SYS_ipc, IPCOP_semget, key, n, fl);
-+	return syscall_redirect(SYS_ipc, IPCOP_semget, key, n, fl);
++	return syscall_redirect(SYS_ipc, 4, (long)IPCOP_semget, (long)key,
++				(long)n, (long)fl);
  #endif
  }
 diff -u -p a/ipc/semop.c b/ipc/semop.c
 --- a/ipc/semop.c
 +++ b/ipc/semop.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  int semop(int id, struct sembuf *buf, size_t n)
  {
  #ifdef SYS_semop
 -	return syscall(SYS_semop, id, buf, n);
-+	return syscall_redirect(SYS_semop, id, buf, n);
++	return syscall_redirect(SYS_semop, 3, (long)id, (long)buf, (long)n);
  #else
 -	return syscall(SYS_ipc, IPCOP_semop, id, n, 0, buf);
-+	return syscall_redirect(SYS_ipc, IPCOP_semop, id, n, 0, buf);
++	return syscall_redirect(SYS_ipc, 5, (long)IPCOP_semop, (long)id,
++				(long)n, (long)0, (long)buf);
  #endif
  }
 diff -u -p a/ipc/semtimedop.c b/ipc/semtimedop.c
 --- a/ipc/semtimedop.c
 +++ b/ipc/semtimedop.c
-@@ -6,8 +6,8 @@
+@@ -6,8 +6,10 @@
  int semtimedop(int id, struct sembuf *buf, size_t n, const struct timespec *ts)
  {
  #ifdef SYS_semtimedop
 -	return syscall(SYS_semtimedop, id, buf, n, ts);
-+	return syscall_redirect(SYS_semtimedop, id, buf, n, ts);
++	return syscall_redirect(SYS_semtimedop, 4, (long)id, (long)buf,
++				(long)n, (long)ts);
  #else
 -	return syscall(SYS_ipc, IPCOP_semtimedop, id, n, 0, buf, ts);
-+	return syscall_redirect(SYS_ipc, IPCOP_semtimedop, id, n, 0, buf, ts);
++	return syscall_redirect(SYS_ipc, 6, (long)IPCOP_semtimedop, (long)id,
++				(long)n, (long)0, (long)buf, (long)ts);
  #endif
  }
 diff -u -p a/ipc/semctl.c b/ipc/semctl.c
 --- a/ipc/semctl.c
 +++ b/ipc/semctl.c
-@@ -21,8 +21,9 @@ int semctl(int id, int num, int cmd, ...
+@@ -21,8 +21,11 @@ int semctl(int id, int num, int cmd, ...
  		va_end(ap);
  	}
  #ifdef SYS_semctl
 -	return syscall(SYS_semctl, id, num, cmd | IPC_64, arg.buf);
-+	return syscall_redirect(SYS_semctl, id, num, cmd | IPC_64, arg.buf);
++	return syscall_redirect(SYS_semctl, 4, (long)id, (long)num,
++				(long)(cmd | IPC_64), (long)arg.buf);
  #else
 -	return syscall(SYS_ipc, IPCOP_semctl, id, num, cmd | IPC_64, &arg.buf);
-+	return syscall_redirect(SYS_ipc, IPCOP_semctl, id, num, cmd | IPC_64,
-+				&arg.buf);
++	return syscall_redirect(SYS_ipc, 5, (long)IPCOP_semctl, (long)id,
++				(long)num, (long)(cmd | IPC_64),
++				(long)&arg.buf);
  #endif
  }
 diff -u -p a/ipc/shmctl.c b/ipc/shmctl.c
 --- a/ipc/shmctl.c
 +++ b/ipc/shmctl.c
-@@ -5,8 +5,9 @@
+@@ -5,8 +5,11 @@
  int shmctl(int id, int cmd, struct shmid_ds *buf)
  {
  #ifdef SYS_shmctl
 -	return syscall(SYS_shmctl, id, cmd | IPC_64, buf);
-+	return syscall_redirect(SYS_shmctl, id, cmd | IPC_64, buf);
++	return syscall_redirect(SYS_shmctl, 3, (long)id, (long)(cmd | IPC_64),
++				(long)buf);
  #else
 -	return syscall(SYS_ipc, IPCOP_shmctl, id, cmd | IPC_64, 0, buf, 0);
-+	return syscall_redirect(SYS_ipc, IPCOP_shmctl, id, cmd | IPC_64, 0,
-+				buf, 0);
++	return syscall_redirect(SYS_ipc, 6, (long)IPCOP_shmctl, (long)id,
++				(long)(cmd | IPC_64), (long)0, (long)buf,
++				(long)0);
  #endif
  }
 diff -u -p a/ipc/msgget.c b/ipc/msgget.c
 --- a/ipc/msgget.c
 +++ b/ipc/msgget.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  int msgget(key_t k, int flag)
  {
  #ifdef SYS_msgget
 -	return syscall(SYS_msgget, k, flag);
-+	return syscall_redirect(SYS_msgget, k, flag);
++	return syscall_redirect(SYS_msgget, 2, (long)k, (long)flag);
  #else
 -	return syscall(SYS_ipc, IPCOP_msgget, k, flag);
-+	return syscall_redirect(SYS_ipc, IPCOP_msgget, k, flag);
++	return syscall_redirect(SYS_ipc, 3, (long)IPCOP_msgget, (long)k,
++				(long)flag);
  #endif
  }
 diff -u -p a/ipc/msgsnd.c b/ipc/msgsnd.c
 --- a/ipc/msgsnd.c
 +++ b/ipc/msgsnd.c
-@@ -6,8 +6,8 @@
+@@ -6,8 +6,10 @@
  int msgsnd(int q, const void *m, size_t len, int flag)
  {
  #ifdef SYS_msgsnd
 -	return syscall_cp(SYS_msgsnd, q, m, len, flag);
-+	return syscall_redirect(SYS_msgsnd, q, m, len, flag);
++	return syscall_redirect(SYS_msgsnd, 4, (long)q, (long)m, (long)len,
++				(long)flag);
  #else
 -	return syscall_cp(SYS_ipc, IPCOP_msgsnd, q, len, flag, m);
-+	return syscall_redirect(SYS_ipc, IPCOP_msgsnd, q, len, flag, m);
++	return syscall_redirect(SYS_ipc, 5, (long)IPCOP_msgsnd, (long)q,
++				(long)len, (long)flag, (long)m);
  #endif
  }
 diff -u -p a/unistd/isatty.c b/unistd/isatty.c
 --- a/unistd/isatty.c
 +++ b/unistd/isatty.c
-@@ -5,5 +5,5 @@
+@@ -5,5 +5,6 @@
  int isatty(int fd)
  {
  	struct winsize wsz;
 -	return !__syscall(SYS_ioctl, fd, TIOCGWINSZ, &wsz);
-+	return !syscall_redirect(SYS_ioctl, fd, TIOCGWINSZ, &wsz);
++	return !syscall_redirect(SYS_ioctl, 3, (long)fd, (long)TIOCGWINSZ,
++				 (long)&wsz);
  }
 diff -u -p a/unistd/getppid.c b/unistd/getppid.c
 --- a/unistd/getppid.c
@@ -1349,33 +1442,35 @@ diff -u -p a/unistd/getppid.c b/unistd/getppid.c
  pid_t getppid(void)
  {
 -	return __syscall(SYS_getppid);
-+	return syscall_redirect(SYS_getppid);
++	return syscall_redirect(SYS_getppid, 0);
  }
 diff -u -p a/unistd/preadv.c b/unistd/preadv.c
 --- a/unistd/preadv.c
 +++ b/unistd/preadv.c
-@@ -6,8 +6,8 @@
+@@ -6,8 +6,9 @@
  
  ssize_t preadv(int fd, const struct iovec *iov, int count, off_t ofs)
  {
 -	return syscall_cp(SYS_preadv, fd, iov, count,
 -		(long)(ofs), (long)(ofs>>32));
-+	return syscall_redirect(SYS_preadv, fd, iov, count, (long)(ofs),
-+				(long)(ofs >> 32));
++	return syscall_redirect(SYS_preadv, 5, (long)fd, (long)iov,
++				(long)count, (long)(long)(ofs),
++				(long)(long)(ofs >> 32));
  }
  
  LFS64(preadv);
 diff -u -p a/unistd/pwritev.c b/unistd/pwritev.c
 --- a/unistd/pwritev.c
 +++ b/unistd/pwritev.c
-@@ -6,8 +6,8 @@
+@@ -6,8 +6,9 @@
  
  ssize_t pwritev(int fd, const struct iovec *iov, int count, off_t ofs)
  {
 -	return syscall_cp(SYS_pwritev, fd, iov, count,
 -		(long)(ofs), (long)(ofs>>32));
-+	return syscall_redirect(SYS_pwritev, fd, iov, count, (long)(ofs),
-+				(long)(ofs >> 32));
++	return syscall_redirect(SYS_pwritev, 5, (long)fd, (long)iov,
++				(long)count, (long)(long)(ofs),
++				(long)(long)(ofs >> 32));
  }
  
  LFS64(pwritev);
@@ -1387,8 +1482,8 @@ diff -u -p a/unistd/pread.c b/unistd/pread.c
  ssize_t pread(int fd, void *buf, size_t size, off_t ofs)
  {
 -	return syscall_cp(SYS_pread, fd, buf, size, __SYSCALL_LL_PRW(ofs));
-+	return syscall_redirect(SYS_pread, fd, buf, size,
-+				__SYSCALL_LL_PRW(ofs));
++	return syscall_redirect(SYS_pread, 4, (long)fd, (long)buf, (long)size,
++				(long)__SYSCALL_LL_PRW(ofs));
  }
  
  LFS64(pread);
@@ -1400,7 +1495,7 @@ diff -u -p a/unistd/getegid.c b/unistd/getegid.c
  gid_t getegid(void)
  {
 -	return __syscall(SYS_getegid);
-+	return syscall_redirect(SYS_getegid);
++	return syscall_redirect(SYS_getegid, 0);
  }
 diff -u -p a/unistd/setsid.c b/unistd/setsid.c
 --- a/unistd/setsid.c
@@ -1410,7 +1505,7 @@ diff -u -p a/unistd/setsid.c b/unistd/setsid.c
  pid_t setsid(void)
  {
 -	return syscall(SYS_setsid);
-+	return syscall_redirect(SYS_setsid);
++	return syscall_redirect(SYS_setsid, 0);
  }
 diff -u -p a/unistd/dup2.c b/unistd/dup2.c
 --- a/unistd/dup2.c
@@ -1420,40 +1515,43 @@ diff -u -p a/unistd/dup2.c b/unistd/dup2.c
  	int r;
  #ifdef SYS_dup2
 -	while ((r=__syscall(SYS_dup2, old, new))==-EBUSY);
-+	while ((r=syscall_redirect(SYS_dup2, old, new))==-EBUSY);
++	while ((r=syscall_redirect(SYS_dup2, 2, (long)old, (long)new))==-EBUSY);
  #else
  	if (old==new) {
 -		r = __syscall(SYS_fcntl, old, F_GETFD);
-+		r = syscall_redirect(SYS_fcntl, old, F_GETFD);
++		r = syscall_redirect(SYS_fcntl, 2, (long)old, (long)F_GETFD);
  		if (r >= 0) return old;
  	} else {
 -		while ((r=__syscall(SYS_dup3, old, new, 0))==-EBUSY);
-+		while ((r=syscall_redirect(SYS_dup3, old, new, 0))==-EBUSY);
++		while ((r=syscall_redirect(SYS_dup3, 3, (long)old, (long)new, (long)0))==-EBUSY);
  	}
  #endif
  	return __syscall_ret(r);
 diff -u -p a/unistd/fchownat.c b/unistd/fchownat.c
 --- a/unistd/fchownat.c
 +++ b/unistd/fchownat.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int fchownat(int fd, const char *path, uid_t uid, gid_t gid, int flag)
  {
 -	return syscall(SYS_fchownat, fd, path, uid, gid, flag);
-+	return syscall_redirect(SYS_fchownat, fd, path, uid, gid, flag);
++	return syscall_redirect(SYS_fchownat, 5, (long)fd, (long)path,
++				(long)uid, (long)gid, (long)flag);
  }
 diff -u -p a/unistd/readlink.c b/unistd/readlink.c
 --- a/unistd/readlink.c
 +++ b/unistd/readlink.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,10 @@
  ssize_t readlink(const char *restrict path, char *restrict buf, size_t bufsize)
  {
  #ifdef SYS_readlink
 -	return syscall(SYS_readlink, path, buf, bufsize);
-+	return syscall_redirect(SYS_readlink, path, buf, bufsize);
++	return syscall_redirect(SYS_readlink, 3, (long)path, (long)buf,
++				(long)bufsize);
  #else
 -	return syscall(SYS_readlinkat, AT_FDCWD, path, buf, bufsize);
-+	return syscall_redirect(SYS_readlinkat, AT_FDCWD, path, buf, bufsize);
++	return syscall_redirect(SYS_readlinkat, 4, (long)AT_FDCWD, (long)path,
++				(long)buf, (long)bufsize);
  #endif
  }
 diff -u -p a/unistd/close.c b/unistd/close.c
@@ -1464,22 +1562,23 @@ diff -u -p a/unistd/close.c b/unistd/close.c
  {
  	fd = __aio_close(fd);
 -	int r = __syscall_cp(SYS_close, fd);
-+	int r = syscall_redirect(SYS_close, fd);
++	int r = syscall_redirect(SYS_close, 1, (long)fd);
  	if (r == -EINTR) r = 0;
  	return __syscall_ret(r);
  }
 diff -u -p a/unistd/symlink.c b/unistd/symlink.c
 --- a/unistd/symlink.c
 +++ b/unistd/symlink.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  int symlink(const char *existing, const char *new)
  {
  #ifdef SYS_symlink
 -	return syscall(SYS_symlink, existing, new);
-+	return syscall_redirect(SYS_symlink, existing, new);
++	return syscall_redirect(SYS_symlink, 2, (long)existing, (long)new);
  #else
 -	return syscall(SYS_symlinkat, existing, AT_FDCWD, new);
-+	return syscall_redirect(SYS_symlinkat, existing, AT_FDCWD, new);
++	return syscall_redirect(SYS_symlinkat, 3, (long)existing,
++				(long)AT_FDCWD, (long)new);
  #endif
  }
 diff -u -p a/unistd/fchdir.c b/unistd/fchdir.c
@@ -1491,14 +1590,14 @@ diff -u -p a/unistd/fchdir.c b/unistd/fchdir.c
  {
 -	int ret = __syscall(SYS_fchdir, fd);
 -	if (ret != -EBADF || __syscall(SYS_fcntl, fd, F_GETFD) < 0)
-+	int ret = syscall_redirect(SYS_fchdir, fd);
-+	if (ret != -EBADF || syscall_redirect(SYS_fcntl, fd, F_GETFD) < 0)
++	int ret = syscall_redirect(SYS_fchdir, 1, (long)fd);
++	if (ret != -EBADF || syscall_redirect(SYS_fcntl, 2, (long)fd, (long)F_GETFD) < 0)
  		return __syscall_ret(ret);
  
  	char buf[15+3*sizeof(int)];
  	__procfdname(buf, fd);
 -	return syscall(SYS_chdir, buf);
-+	return syscall_redirect(SYS_chdir, buf);
++	return syscall_redirect(SYS_chdir, 1, (long)buf);
  }
 diff -u -p a/unistd/setpgid.c b/unistd/setpgid.c
 --- a/unistd/setpgid.c
@@ -1508,7 +1607,7 @@ diff -u -p a/unistd/setpgid.c b/unistd/setpgid.c
  int setpgid(pid_t pid, pid_t pgid)
  {
 -	return syscall(SYS_setpgid, pid, pgid);
-+	return syscall_redirect(SYS_setpgid, pid, pgid);
++	return syscall_redirect(SYS_setpgid, 2, (long)pid, (long)pgid);
  }
 diff -u -p a/unistd/fsync.c b/unistd/fsync.c
 --- a/unistd/fsync.c
@@ -1518,7 +1617,7 @@ diff -u -p a/unistd/fsync.c b/unistd/fsync.c
  int fsync(int fd)
  {
 -	return syscall_cp(SYS_fsync, fd);
-+	return syscall_redirect(SYS_fsync, fd);
++	return syscall_redirect(SYS_fsync, 1, (long)fd);
  }
 diff -u -p a/unistd/getpid.c b/unistd/getpid.c
 --- a/unistd/getpid.c
@@ -1528,35 +1627,39 @@ diff -u -p a/unistd/getpid.c b/unistd/getpid.c
  pid_t getpid(void)
  {
 -	return __syscall(SYS_getpid);
-+	return syscall_redirect(SYS_getpid);
++	return syscall_redirect(SYS_getpid, 0);
  }
 diff -u -p a/unistd/chown.c b/unistd/chown.c
 --- a/unistd/chown.c
 +++ b/unistd/chown.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,10 @@
  int chown(const char *path, uid_t uid, gid_t gid)
  {
  #ifdef SYS_chown
 -	return syscall(SYS_chown, path, uid, gid);
-+	return syscall_redirect(SYS_chown, path, uid, gid);
++	return syscall_redirect(SYS_chown, 3, (long)path, (long)uid,
++				(long)gid);
  #else
 -	return syscall(SYS_fchownat, AT_FDCWD, path, uid, gid, 0);
-+	return syscall_redirect(SYS_fchownat, AT_FDCWD, path, uid, gid, 0);
++	return syscall_redirect(SYS_fchownat, 5, (long)AT_FDCWD, (long)path,
++				(long)uid, (long)gid, (long)0);
  #endif
  }
 diff -u -p a/unistd/lseek.c b/unistd/lseek.c
 --- a/unistd/lseek.c
 +++ b/unistd/lseek.c
-@@ -6,9 +6,10 @@ off_t lseek(int fd, off_t offset, int wh
+@@ -6,9 +6,12 @@ off_t lseek(int fd, off_t offset, int wh
  {
  #ifdef SYS__llseek
  	off_t result;
 -	return syscall(SYS__llseek, fd, offset>>32, offset, &result, whence) ? -1 : result;
-+	return syscall_redirect(SYS__llseek, fd, offset >> 32, offset,
-+				&result, whence) ? -1 : result;
++	return syscall_redirect(SYS__llseek, 5, (long)fd,
++				(long)(offset >> 32), (long)offset,
++				(long)&result, (long)whence) ? -1 : result;
  #else
 -	return syscall(SYS_lseek, fd, offset, whence);
-+	return syscall_redirect(SYS_lseek, fd, offset, whence);
++	return syscall_redirect(SYS_lseek, 3, (long)fd, (long)offset,
++				(long)whence);
  #endif
  }
  
@@ -1568,10 +1671,10 @@ diff -u -p a/unistd/pipe.c b/unistd/pipe.c
  {
  #ifdef SYS_pipe
 -	return syscall(SYS_pipe, fd);
-+	return syscall_redirect(SYS_pipe, fd);
++	return syscall_redirect(SYS_pipe, 1, (long)fd);
  #else
 -	return syscall(SYS_pipe2, fd, 0);
-+	return syscall_redirect(SYS_pipe2, fd, 0);
++	return syscall_redirect(SYS_pipe2, 2, (long)fd, (long)0);
  #endif
  }
 diff -u -p a/unistd/nice.c b/unistd/nice.c
@@ -1582,7 +1685,7 @@ diff -u -p a/unistd/nice.c b/unistd/nice.c
  {
  #ifdef SYS_nice
 -	return syscall(SYS_nice, inc);
-+	return syscall_redirect(SYS_nice, inc);
++	return syscall_redirect(SYS_nice, 1, (long)inc);
  #else
  	return setpriority(PRIO_PROCESS, 0, getpriority(PRIO_PROCESS, 0)+inc);
  #endif
@@ -1594,42 +1697,44 @@ diff -u -p a/unistd/pwrite.c b/unistd/pwrite.c
  ssize_t pwrite(int fd, const void *buf, size_t size, off_t ofs)
  {
 -	return syscall_cp(SYS_pwrite, fd, buf, size, __SYSCALL_LL_PRW(ofs));
-+	return syscall_redirect(SYS_pwrite, fd, buf, size,
-+				__SYSCALL_LL_PRW(ofs));
++	return syscall_redirect(SYS_pwrite, 4, (long)fd, (long)buf,
++				(long)size, (long)__SYSCALL_LL_PRW(ofs));
  }
  
  LFS64(pwrite);
 diff -u -p a/unistd/dup3.c b/unistd/dup3.c
 --- a/unistd/dup3.c
 +++ b/unistd/dup3.c
-@@ -11,13 +11,14 @@ int __dup3(int old, int new, int flags)
+@@ -11,13 +11,15 @@ int __dup3(int old, int new, int flags)
  #ifdef SYS_dup2
  	if (old==new) return __syscall_ret(-EINVAL);
  	if (flags & O_CLOEXEC) {
 -		while ((r=__syscall(SYS_dup3, old, new, flags))==-EBUSY);
-+		while ((r=syscall_redirect(SYS_dup3, old, new, flags))==-EBUSY);
++		while ((r=syscall_redirect(SYS_dup3, 3, (long)old, (long)new, (long)flags))==-EBUSY);
  		if (r!=-ENOSYS) return __syscall_ret(r);
  	}
 -	while ((r=__syscall(SYS_dup2, old, new))==-EBUSY);
 -	if (flags & O_CLOEXEC) __syscall(SYS_fcntl, new, F_SETFD, FD_CLOEXEC);
-+	while ((r=syscall_redirect(SYS_dup2, old, new))==-EBUSY);
-+	if (flags & O_CLOEXEC) syscall_redirect(SYS_fcntl, new, F_SETFD,
-+						FD_CLOEXEC);
++	while ((r=syscall_redirect(SYS_dup2, 2, (long)old, (long)new))==-EBUSY);
++	if (flags & O_CLOEXEC) syscall_redirect(SYS_fcntl, 3, (long)new,
++						(long)F_SETFD,
++						(long)FD_CLOEXEC);
  #else
 -	while ((r=__syscall(SYS_dup3, old, new, flags))==-EBUSY);
-+	while ((r=syscall_redirect(SYS_dup3, old, new, flags))==-EBUSY);
++	while ((r=syscall_redirect(SYS_dup3, 3, (long)old, (long)new, (long)flags))==-EBUSY);
  #endif
  	return __syscall_ret(r);
  }
 diff -u -p a/unistd/unlinkat.c b/unistd/unlinkat.c
 --- a/unistd/unlinkat.c
 +++ b/unistd/unlinkat.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int unlinkat(int fd, const char *path, int flag)
  {
 -	return syscall(SYS_unlinkat, fd, path, flag);
-+	return syscall_redirect(SYS_unlinkat, fd, path, flag);
++	return syscall_redirect(SYS_unlinkat, 3, (long)fd, (long)path,
++				(long)flag);
  }
 diff -u -p a/unistd/getsid.c b/unistd/getsid.c
 --- a/unistd/getsid.c
@@ -1639,12 +1744,12 @@ diff -u -p a/unistd/getsid.c b/unistd/getsid.c
  pid_t getsid(pid_t pid)
  {
 -	return syscall(SYS_getsid, pid);
-+	return syscall_redirect(SYS_getsid, pid);
++	return syscall_redirect(SYS_getsid, 1, (long)pid);
  }
 diff -u -p a/unistd/faccessat.c b/unistd/faccessat.c
 --- a/unistd/faccessat.c
 +++ b/unistd/faccessat.c
-@@ -23,10 +23,10 @@ static int checker(void *p)
+@@ -23,10 +23,11 @@ static int checker(void *p)
  	struct ctx *c = p;
  	int ret;
  	int i;
@@ -1652,29 +1757,33 @@ diff -u -p a/unistd/faccessat.c b/unistd/faccessat.c
 -	    || __syscall(SYS_setreuid, __syscall(SYS_geteuid), -1))
 -		__syscall(SYS_exit, 1);
 -	ret = __syscall(SYS_faccessat, c->fd, c->filename, c->amode, 0);
-+	if (__syscall(SYS_setregid, syscall_redirect(SYS_getegid), -1)
-+	    || __syscall(SYS_setreuid, syscall_redirect(SYS_geteuid), -1))
-+		syscall_redirect(SYS_exit, 1);
-+	ret = syscall_redirect(SYS_faccessat, c->fd, c->filename, c->amode, 0);
++	if (__syscall(SYS_setregid, syscall_redirect(SYS_getegid, 0), -1)
++	    || __syscall(SYS_setreuid, syscall_redirect(SYS_geteuid, 0), -1))
++		syscall_redirect(SYS_exit, 1, (long)1);
++	ret = syscall_redirect(SYS_faccessat, 4, (long)c->fd,
++			       (long)c->filename, (long)c->amode, (long)0);
  	for (i=0; i < sizeof errors/sizeof *errors - 1 && ret!=errors[i]; i++);
  	return i;
  }
-@@ -34,7 +34,8 @@ static int checker(void *p)
+@@ -34,7 +35,9 @@ static int checker(void *p)
  int faccessat(int fd, const char *filename, int amode, int flag)
  {
  	if (!flag || (flag==AT_EACCESS && getuid()==geteuid() && getgid()==getegid()))
 -		return syscall(SYS_faccessat, fd, filename, amode, flag);
-+		return syscall_redirect(SYS_faccessat, fd, filename, amode,
-+					flag);
++		return syscall_redirect(SYS_faccessat, 4, (long)fd,
++					(long)filename, (long)amode,
++					(long)flag);
  
  	if (flag != AT_EACCESS)
  		return __syscall_ret(-EINVAL);
-@@ -51,7 +52,7 @@ int faccessat(int fd, const char *filena
+@@ -51,7 +54,9 @@ int faccessat(int fd, const char *filena
  	if (pid > 0) {
  		int status;
  		do {
 -			__syscall(SYS_wait4, pid, &status, __WCLONE, 0);
-+			syscall_redirect(SYS_wait4, pid, &status, __WCLONE, 0);
++			syscall_redirect(SYS_wait4, 4, (long)pid,
++					 (long)&status, (long)__WCLONE,
++					 (long)0);
  		} while (!WIFEXITED(status) && !WIFSIGNALED(status));
  		if (WIFEXITED(status))
  			ret = errors[WEXITSTATUS(status)];
@@ -1686,7 +1795,7 @@ diff -u -p a/unistd/geteuid.c b/unistd/geteuid.c
  uid_t geteuid(void)
  {
 -	return __syscall(SYS_geteuid);
-+	return syscall_redirect(SYS_geteuid);
++	return syscall_redirect(SYS_geteuid, 0);
  }
 diff -u -p a/unistd/read.c b/unistd/read.c
 --- a/unistd/read.c
@@ -1696,7 +1805,7 @@ diff -u -p a/unistd/read.c b/unistd/read.c
  ssize_t read(int fd, void *buf, size_t count)
  {
 -	return syscall_cp(SYS_read, fd, buf, count);
-+	return syscall_redirect(SYS_read, fd, buf, count);
++	return syscall_redirect(SYS_read, 3, (long)fd, (long)buf, (long)count);
  }
 diff -u -p a/unistd/acct.c b/unistd/acct.c
 --- a/unistd/acct.c
@@ -1706,7 +1815,7 @@ diff -u -p a/unistd/acct.c b/unistd/acct.c
  int acct(const char *filename)
  {
 -	return syscall(SYS_acct, filename);
-+	return syscall_redirect(SYS_acct, filename);
++	return syscall_redirect(SYS_acct, 1, (long)filename);
  }
 diff -u -p a/unistd/chdir.c b/unistd/chdir.c
 --- a/unistd/chdir.c
@@ -1716,90 +1825,97 @@ diff -u -p a/unistd/chdir.c b/unistd/chdir.c
  int chdir(const char *path)
  {
 -	return syscall(SYS_chdir, path);
-+	return syscall_redirect(SYS_chdir, path);
++	return syscall_redirect(SYS_chdir, 1, (long)path);
  }
 diff -u -p a/unistd/truncate.c b/unistd/truncate.c
 --- a/unistd/truncate.c
 +++ b/unistd/truncate.c
-@@ -4,7 +4,7 @@
+@@ -4,7 +4,8 @@
  
  int truncate(const char *path, off_t length)
  {
 -	return syscall(SYS_truncate, path, __SYSCALL_LL_O(length));
-+	return syscall_redirect(SYS_truncate, path, __SYSCALL_LL_O(length));
++	return syscall_redirect(SYS_truncate, 2, (long)path,
++				(long)__SYSCALL_LL_O(length));
  }
  
  LFS64(truncate);
 diff -u -p a/unistd/ftruncate.c b/unistd/ftruncate.c
 --- a/unistd/ftruncate.c
 +++ b/unistd/ftruncate.c
-@@ -4,7 +4,7 @@
+@@ -4,7 +4,8 @@
  
  int ftruncate(int fd, off_t length)
  {
 -	return syscall(SYS_ftruncate, fd, __SYSCALL_LL_O(length));
-+	return syscall_redirect(SYS_ftruncate, fd, __SYSCALL_LL_O(length));
++	return syscall_redirect(SYS_ftruncate, 2, (long)fd,
++				(long)__SYSCALL_LL_O(length));
  }
  
  LFS64(ftruncate);
 diff -u -p a/unistd/rmdir.c b/unistd/rmdir.c
 --- a/unistd/rmdir.c
 +++ b/unistd/rmdir.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  int rmdir(const char *path)
  {
  #ifdef SYS_rmdir
 -	return syscall(SYS_rmdir, path);
-+	return syscall_redirect(SYS_rmdir, path);
++	return syscall_redirect(SYS_rmdir, 1, (long)path);
  #else
 -	return syscall(SYS_unlinkat, AT_FDCWD, path, AT_REMOVEDIR);
-+	return syscall_redirect(SYS_unlinkat, AT_FDCWD, path, AT_REMOVEDIR);
++	return syscall_redirect(SYS_unlinkat, 3, (long)AT_FDCWD, (long)path,
++				(long)AT_REMOVEDIR);
  #endif
  }
 diff -u -p a/unistd/alarm.c b/unistd/alarm.c
 --- a/unistd/alarm.c
 +++ b/unistd/alarm.c
-@@ -5,6 +5,6 @@
+@@ -5,6 +5,7 @@
  unsigned alarm(unsigned seconds)
  {
  	struct itimerval it = { .it_value.tv_sec = seconds };
 -	__syscall(SYS_setitimer, ITIMER_REAL, &it, &it);
-+	syscall_redirect(SYS_setitimer, ITIMER_REAL, &it, &it);
++	syscall_redirect(SYS_setitimer, 3, (long)ITIMER_REAL, (long)&it,
++			 (long)&it);
  	return it.it_value.tv_sec + !!it.it_value.tv_usec;
  }
 diff -u -p a/unistd/fchown.c b/unistd/fchown.c
 --- a/unistd/fchown.c
 +++ b/unistd/fchown.c
-@@ -7,16 +7,16 @@ void __procfdname(char *, unsigned);
+@@ -7,16 +7,18 @@ void __procfdname(char *, unsigned);
  
  int fchown(int fd, uid_t uid, gid_t gid)
  {
 -	int ret = __syscall(SYS_fchown, fd, uid, gid);
 -	if (ret != -EBADF || __syscall(SYS_fcntl, fd, F_GETFD) < 0)
-+	int ret = syscall_redirect(SYS_fchown, fd, uid, gid);
-+	if (ret != -EBADF || syscall_redirect(SYS_fcntl, fd, F_GETFD) < 0)
++	int ret = syscall_redirect(SYS_fchown, 3, (long)fd, (long)uid,
++				   (long)gid);
++	if (ret != -EBADF || syscall_redirect(SYS_fcntl, 2, (long)fd, (long)F_GETFD) < 0)
  		return __syscall_ret(ret);
  
  	char buf[15+3*sizeof(int)];
  	__procfdname(buf, fd);
  #ifdef SYS_chown
 -	return syscall(SYS_chown, buf, uid, gid);
-+	return syscall_redirect(SYS_chown, buf, uid, gid);
++	return syscall_redirect(SYS_chown, 3, (long)buf, (long)uid, (long)gid);
  #else
 -	return syscall(SYS_fchownat, AT_FDCWD, buf, uid, gid, 0);
-+	return syscall_redirect(SYS_fchownat, AT_FDCWD, buf, uid, gid, 0);
++	return syscall_redirect(SYS_fchownat, 5, (long)AT_FDCWD, (long)buf,
++				(long)uid, (long)gid, (long)0);
  #endif
  
  }
 diff -u -p a/unistd/writev.c b/unistd/writev.c
 --- a/unistd/writev.c
 +++ b/unistd/writev.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  ssize_t writev(int fd, const struct iovec *iov, int count)
  {
 -	return syscall_cp(SYS_writev, fd, iov, count);
-+	return syscall_redirect(SYS_writev, fd, iov, count);
++	return syscall_redirect(SYS_writev, 3, (long)fd, (long)iov,
++				(long)count);
  }
 diff -u -p a/unistd/sync.c b/unistd/sync.c
 --- a/unistd/sync.c
@@ -1809,7 +1925,7 @@ diff -u -p a/unistd/sync.c b/unistd/sync.c
  void sync(void)
  {
 -	__syscall(SYS_sync);
-+	syscall_redirect(SYS_sync);
++	syscall_redirect(SYS_sync, 0);
  }
 diff -u -p a/unistd/fdatasync.c b/unistd/fdatasync.c
 --- a/unistd/fdatasync.c
@@ -1819,7 +1935,7 @@ diff -u -p a/unistd/fdatasync.c b/unistd/fdatasync.c
  int fdatasync(int fd)
  {
 -	return syscall_cp(SYS_fdatasync, fd);
-+	return syscall_redirect(SYS_fdatasync, fd);
++	return syscall_redirect(SYS_fdatasync, 1, (long)fd);
  }
 diff -u -p a/unistd/link.c b/unistd/link.c
 --- a/unistd/link.c
@@ -1829,25 +1945,26 @@ diff -u -p a/unistd/link.c b/unistd/link.c
  {
  #ifdef SYS_link
 -	return syscall(SYS_link, existing, new);
-+	return syscall_redirect(SYS_link, existing, new);
++	return syscall_redirect(SYS_link, 2, (long)existing, (long)new);
  #else
 -	return syscall(SYS_linkat, AT_FDCWD, existing, AT_FDCWD, new, 0);
-+	return syscall_redirect(SYS_linkat, AT_FDCWD, existing, AT_FDCWD, new,
-+				0);
++	return syscall_redirect(SYS_linkat, 5, (long)AT_FDCWD, (long)existing,
++				(long)AT_FDCWD, (long)new, (long)0);
  #endif
  }
 diff -u -p a/unistd/pause.c b/unistd/pause.c
 --- a/unistd/pause.c
 +++ b/unistd/pause.c
-@@ -6,8 +6,8 @@
+@@ -6,8 +6,9 @@
  int pause(void)
  {
  #ifdef SYS_pause
 -	return syscall_cp(SYS_pause);
-+	return syscall_redirect(SYS_pause);
++	return syscall_redirect(SYS_pause, 0);
  #else
 -	return syscall_cp(SYS_ppoll, 0, 0, 0, 0);
-+	return syscall_redirect(SYS_ppoll, 0, 0, 0, 0);
++	return syscall_redirect(SYS_ppoll, 4, (long)0, (long)0, (long)0,
++				(long)0);
  #endif
  }
 diff -u -p a/unistd/dup.c b/unistd/dup.c
@@ -1858,17 +1975,18 @@ diff -u -p a/unistd/dup.c b/unistd/dup.c
  int dup(int fd)
  {
 -	return syscall(SYS_dup, fd);
-+	return syscall_redirect(SYS_dup, fd);
++	return syscall_redirect(SYS_dup, 1, (long)fd);
  }
 diff -u -p a/unistd/renameat.c b/unistd/renameat.c
 --- a/unistd/renameat.c
 +++ b/unistd/renameat.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int renameat(int oldfd, const char *old, int newfd, const char *new)
  {
 -	return syscall(SYS_renameat, oldfd, old, newfd, new);
-+	return syscall_redirect(SYS_renameat, oldfd, old, newfd, new);
++	return syscall_redirect(SYS_renameat, 4, (long)oldfd, (long)old,
++				(long)newfd, (long)new);
  }
 diff -u -p a/unistd/getgroups.c b/unistd/getgroups.c
 --- a/unistd/getgroups.c
@@ -1878,55 +1996,59 @@ diff -u -p a/unistd/getgroups.c b/unistd/getgroups.c
  int getgroups(int count, gid_t list[])
  {
 -	return syscall(SYS_getgroups, count, list);
-+	return syscall_redirect(SYS_getgroups, count, list);
++	return syscall_redirect(SYS_getgroups, 2, (long)count, (long)list);
  }
 diff -u -p a/unistd/unlink.c b/unistd/unlink.c
 --- a/unistd/unlink.c
 +++ b/unistd/unlink.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  int unlink(const char *path)
  {
  #ifdef SYS_unlink
 -	return syscall(SYS_unlink, path);
-+	return syscall_redirect(SYS_unlink, path);
++	return syscall_redirect(SYS_unlink, 1, (long)path);
  #else
 -	return syscall(SYS_unlinkat, AT_FDCWD, path, 0);
-+	return syscall_redirect(SYS_unlinkat, AT_FDCWD, path, 0);
++	return syscall_redirect(SYS_unlinkat, 3, (long)AT_FDCWD, (long)path,
++				(long)0);
  #endif
  }
 diff -u -p a/unistd/readlinkat.c b/unistd/readlinkat.c
 --- a/unistd/readlinkat.c
 +++ b/unistd/readlinkat.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  ssize_t readlinkat(int fd, const char *restrict path, char *restrict buf, size_t bufsize)
  {
 -	return syscall(SYS_readlinkat, fd, path, buf, bufsize);
-+	return syscall_redirect(SYS_readlinkat, fd, path, buf, bufsize);
++	return syscall_redirect(SYS_readlinkat, 4, (long)fd, (long)path,
++				(long)buf, (long)bufsize);
  }
 diff -u -p a/unistd/access.c b/unistd/access.c
 --- a/unistd/access.c
 +++ b/unistd/access.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  int access(const char *filename, int amode)
  {
  #ifdef SYS_access
 -	return syscall(SYS_access, filename, amode);
-+	return syscall_redirect(SYS_access, filename, amode);
++	return syscall_redirect(SYS_access, 2, (long)filename, (long)amode);
  #else
 -	return syscall(SYS_faccessat, AT_FDCWD, filename, amode, 0);
-+	return syscall_redirect(SYS_faccessat, AT_FDCWD, filename, amode, 0);
++	return syscall_redirect(SYS_faccessat, 4, (long)AT_FDCWD,
++				(long)filename, (long)amode, (long)0);
  #endif
  }
 diff -u -p a/unistd/readv.c b/unistd/readv.c
 --- a/unistd/readv.c
 +++ b/unistd/readv.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  ssize_t readv(int fd, const struct iovec *iov, int count)
  {
 -	return syscall_cp(SYS_readv, fd, iov, count);
-+	return syscall_redirect(SYS_readv, fd, iov, count);
++	return syscall_redirect(SYS_readv, 3, (long)fd, (long)iov,
++				(long)count);
  }
 diff -u -p a/unistd/getcwd.c b/unistd/getcwd.c
 --- a/unistd/getcwd.c
@@ -1936,7 +2058,7 @@ diff -u -p a/unistd/getcwd.c b/unistd/getcwd.c
  		return 0;
  	}
 -	if (syscall(SYS_getcwd, buf, size) < 0) return 0;
-+	if (syscall_redirect(SYS_getcwd, buf, size) < 0) return 0;
++	if (syscall_redirect(SYS_getcwd, 2, (long)buf, (long)size) < 0) return 0;
  	return buf == tmp ? strdup(buf) : buf;
  }
 diff -u -p a/unistd/getuid.c b/unistd/getuid.c
@@ -1947,53 +2069,59 @@ diff -u -p a/unistd/getuid.c b/unistd/getuid.c
  uid_t getuid(void)
  {
 -	return __syscall(SYS_getuid);
-+	return syscall_redirect(SYS_getuid);
++	return syscall_redirect(SYS_getuid, 0);
  }
 diff -u -p a/unistd/pipe2.c b/unistd/pipe2.c
 --- a/unistd/pipe2.c
 +++ b/unistd/pipe2.c
-@@ -6,17 +6,17 @@
+@@ -6,17 +6,21 @@
  int pipe2(int fd[2], int flag)
  {
  	if (!flag) return pipe(fd);
 -	int ret = __syscall(SYS_pipe2, fd, flag);
-+	int ret = syscall_redirect(SYS_pipe2, fd, flag);
++	int ret = syscall_redirect(SYS_pipe2, 2, (long)fd, (long)flag);
  	if (ret != -ENOSYS) return __syscall_ret(ret);
  	ret = pipe(fd);
  	if (ret) return ret;
  	if (flag & O_CLOEXEC) {
 -		__syscall(SYS_fcntl, fd[0], F_SETFD, FD_CLOEXEC);
 -		__syscall(SYS_fcntl, fd[1], F_SETFD, FD_CLOEXEC);
-+		syscall_redirect(SYS_fcntl, fd[0], F_SETFD, FD_CLOEXEC);
-+		syscall_redirect(SYS_fcntl, fd[1], F_SETFD, FD_CLOEXEC);
++		syscall_redirect(SYS_fcntl, 3, (long)fd[0], (long)F_SETFD,
++				 (long)FD_CLOEXEC);
++		syscall_redirect(SYS_fcntl, 3, (long)fd[1], (long)F_SETFD,
++				 (long)FD_CLOEXEC);
  	}
  	if (flag & O_NONBLOCK) {
 -		__syscall(SYS_fcntl, fd[0], F_SETFL, O_NONBLOCK);
 -		__syscall(SYS_fcntl, fd[1], F_SETFL, O_NONBLOCK);
-+		syscall_redirect(SYS_fcntl, fd[0], F_SETFL, O_NONBLOCK);
-+		syscall_redirect(SYS_fcntl, fd[1], F_SETFL, O_NONBLOCK);
++		syscall_redirect(SYS_fcntl, 3, (long)fd[0], (long)F_SETFL,
++				 (long)O_NONBLOCK);
++		syscall_redirect(SYS_fcntl, 3, (long)fd[1], (long)F_SETFL,
++				 (long)O_NONBLOCK);
  	}
  	return 0;
  }
 diff -u -p a/unistd/write.c b/unistd/write.c
 --- a/unistd/write.c
 +++ b/unistd/write.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  ssize_t write(int fd, const void *buf, size_t count)
  {
 -	return syscall_cp(SYS_write, fd, buf, count);
-+	return syscall_redirect(SYS_write, fd, buf, count);
++	return syscall_redirect(SYS_write, 3, (long)fd, (long)buf,
++				(long)count);
  }
 diff -u -p a/unistd/setxid.c b/unistd/setxid.c
 --- a/unistd/setxid.c
 +++ b/unistd/setxid.c
-@@ -13,14 +13,14 @@ static void do_setxid(void *p)
+@@ -13,14 +13,15 @@ static void do_setxid(void *p)
  {
  	struct ctx *c = p;
  	if (c->err>0) return;
 -	int ret = -__syscall(c->nr, c->id, c->eid, c->sid);
-+	int ret = -syscall_redirect(c->nr, c->id, c->eid, c->sid);
++	int ret = -syscall_redirect(c->nr, 3, (long)c->id, (long)c->eid,
++				    (long)c->sid);
  	if (ret && !c->err) {
  		/* If one thread fails to set ids after another has already
  		 * succeeded, forcibly killing the process is the only safe
@@ -2001,7 +2129,7 @@ diff -u -p a/unistd/setxid.c b/unistd/setxid.c
  		 * SIGKILL because it is uncatchable. */
  		__block_all_sigs(0);
 -		__syscall(SYS_kill, __syscall(SYS_getpid), SIGKILL);
-+		__syscall(SYS_kill, syscall_redirect(SYS_getpid), SIGKILL);
++		__syscall(SYS_kill, syscall_redirect(SYS_getpid, 0), SIGKILL);
  	}
  	c->err = ret;
  }
@@ -2013,21 +2141,23 @@ diff -u -p a/unistd/getpgrp.c b/unistd/getpgrp.c
  pid_t getpgrp(void)
  {
 -	return __syscall(SYS_getpgid, 0);
-+	return syscall_redirect(SYS_getpgid, 0);
++	return syscall_redirect(SYS_getpgid, 1, (long)0);
  }
 diff -u -p a/unistd/lchown.c b/unistd/lchown.c
 --- a/unistd/lchown.c
 +++ b/unistd/lchown.c
-@@ -5,8 +5,9 @@
+@@ -5,8 +5,11 @@
  int lchown(const char *path, uid_t uid, gid_t gid)
  {
  #ifdef SYS_lchown
 -	return syscall(SYS_lchown, path, uid, gid);
-+	return syscall_redirect(SYS_lchown, path, uid, gid);
++	return syscall_redirect(SYS_lchown, 3, (long)path, (long)uid,
++				(long)gid);
  #else
 -	return syscall(SYS_fchownat, AT_FDCWD, path, uid, gid, AT_SYMLINK_NOFOLLOW);
-+	return syscall_redirect(SYS_fchownat, AT_FDCWD, path, uid, gid,
-+				AT_SYMLINK_NOFOLLOW);
++	return syscall_redirect(SYS_fchownat, 5, (long)AT_FDCWD, (long)path,
++				(long)uid, (long)gid,
++				(long)AT_SYMLINK_NOFOLLOW);
  #endif
  }
 diff -u -p a/unistd/getgid.c b/unistd/getgid.c
@@ -2038,27 +2168,29 @@ diff -u -p a/unistd/getgid.c b/unistd/getgid.c
  gid_t getgid(void)
  {
 -	return __syscall(SYS_getgid);
-+	return syscall_redirect(SYS_getgid);
++	return syscall_redirect(SYS_getgid, 0);
  }
 diff -u -p a/unistd/symlinkat.c b/unistd/symlinkat.c
 --- a/unistd/symlinkat.c
 +++ b/unistd/symlinkat.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int symlinkat(const char *existing, int fd, const char *new)
  {
 -	return syscall(SYS_symlinkat, existing, fd, new);
-+	return syscall_redirect(SYS_symlinkat, existing, fd, new);
++	return syscall_redirect(SYS_symlinkat, 3, (long)existing, (long)fd,
++				(long)new);
  }
 diff -u -p a/unistd/linkat.c b/unistd/linkat.c
 --- a/unistd/linkat.c
 +++ b/unistd/linkat.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int linkat(int fd1, const char *existing, int fd2, const char *new, int flag)
  {
 -	return syscall(SYS_linkat, fd1, existing, fd2, new, flag);
-+	return syscall_redirect(SYS_linkat, fd1, existing, fd2, new, flag);
++	return syscall_redirect(SYS_linkat, 5, (long)fd1, (long)existing,
++				(long)fd2, (long)new, (long)flag);
  }
 diff -u -p a/unistd/getpgid.c b/unistd/getpgid.c
 --- a/unistd/getpgid.c
@@ -2068,20 +2200,20 @@ diff -u -p a/unistd/getpgid.c b/unistd/getpgid.c
  pid_t getpgid(pid_t pid)
  {
 -	return syscall(SYS_getpgid, pid);
-+	return syscall_redirect(SYS_getpgid, pid);
++	return syscall_redirect(SYS_getpgid, 1, (long)pid);
  }
 diff -u -p a/linux/inotify.c b/linux/inotify.c
 --- a/linux/inotify.c
 +++ b/linux/inotify.c
-@@ -8,19 +8,19 @@ int inotify_init()
+@@ -8,19 +8,20 @@ int inotify_init()
  }
  int inotify_init1(int flags)
  {
 -	int r = __syscall(SYS_inotify_init1, flags);
-+	int r = syscall_redirect(SYS_inotify_init1, flags);
++	int r = syscall_redirect(SYS_inotify_init1, 1, (long)flags);
  #ifdef SYS_inotify_init
 -	if (r==-ENOSYS && !flags) r = __syscall(SYS_inotify_init);
-+	if (r==-ENOSYS && !flags) r = syscall_redirect(SYS_inotify_init);
++	if (r==-ENOSYS && !flags) r = syscall_redirect(SYS_inotify_init, 0);
  #endif
  	return __syscall_ret(r);
  }
@@ -2089,13 +2221,14 @@ diff -u -p a/linux/inotify.c b/linux/inotify.c
  int inotify_add_watch(int fd, const char *pathname, uint32_t mask)
  {
 -	return syscall(SYS_inotify_add_watch, fd, pathname, mask);
-+	return syscall_redirect(SYS_inotify_add_watch, fd, pathname, mask);
++	return syscall_redirect(SYS_inotify_add_watch, 3, (long)fd,
++				(long)pathname, (long)mask);
  }
  
  int inotify_rm_watch(int fd, int wd)
  {
 -	return syscall(SYS_inotify_rm_watch, fd, wd);
-+	return syscall_redirect(SYS_inotify_rm_watch, fd, wd);
++	return syscall_redirect(SYS_inotify_rm_watch, 2, (long)fd, (long)wd);
  }
 diff -u -p a/linux/iopl.c b/linux/iopl.c
 --- a/linux/iopl.c
@@ -2105,28 +2238,30 @@ diff -u -p a/linux/iopl.c b/linux/iopl.c
  int iopl(int level)
  {
 -	return syscall(SYS_iopl, level);
-+	return syscall_redirect(SYS_iopl, level);
++	return syscall_redirect(SYS_iopl, 1, (long)level);
  }
  #endif
 diff -u -p a/linux/klogctl.c b/linux/klogctl.c
 --- a/linux/klogctl.c
 +++ b/linux/klogctl.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int klogctl (int type, char *buf, int len)
  {
 -	return syscall(SYS_syslog, type, buf, len);
-+	return syscall_redirect(SYS_syslog, type, buf, len);
++	return syscall_redirect(SYS_syslog, 3, (long)type, (long)buf,
++				(long)len);
  }
 diff -u -p a/linux/quotactl.c b/linux/quotactl.c
 --- a/linux/quotactl.c
 +++ b/linux/quotactl.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int quotactl(int cmd, const char *special, int id, char *addr)
  {
 -	return syscall(SYS_quotactl, cmd, special, id, addr);
-+	return syscall_redirect(SYS_quotactl, cmd, special, id, addr);
++	return syscall_redirect(SYS_quotactl, 4, (long)cmd, (long)special,
++				(long)id, (long)addr);
  }
 diff -u -p a/linux/adjtimex.c b/linux/adjtimex.c
 --- a/linux/adjtimex.c
@@ -2136,7 +2271,7 @@ diff -u -p a/linux/adjtimex.c b/linux/adjtimex.c
  int adjtimex(struct timex *tx)
  {
 -	return syscall(SYS_adjtimex, tx);
-+	return syscall_redirect(SYS_adjtimex, tx);
++	return syscall_redirect(SYS_adjtimex, 1, (long)tx);
  }
 diff -u -p a/linux/personality.c b/linux/personality.c
 --- a/linux/personality.c
@@ -2146,7 +2281,7 @@ diff -u -p a/linux/personality.c b/linux/personality.c
  int personality(unsigned long persona)
  {
 -	return syscall(SYS_personality, persona);
-+	return syscall_redirect(SYS_personality, persona);
++	return syscall_redirect(SYS_personality, 1, (long)persona);
  }
  #endif
 diff -u -p a/linux/setns.c b/linux/setns.c
@@ -2157,48 +2292,51 @@ diff -u -p a/linux/setns.c b/linux/setns.c
  int setns(int fd, int nstype)
  {
 -	return syscall(SYS_setns, fd, nstype);
-+	return syscall_redirect(SYS_setns, fd, nstype);
++	return syscall_redirect(SYS_setns, 2, (long)fd, (long)nstype);
  }
 diff -u -p a/linux/fanotify.c b/linux/fanotify.c
 --- a/linux/fanotify.c
 +++ b/linux/fanotify.c
-@@ -3,12 +3,13 @@
+@@ -3,12 +3,15 @@
  
  int fanotify_init(unsigned flags, unsigned event_f_flags)
  {
 -	return syscall(SYS_fanotify_init, flags, event_f_flags);
-+	return syscall_redirect(SYS_fanotify_init, flags, event_f_flags);
++	return syscall_redirect(SYS_fanotify_init, 2, (long)flags,
++				(long)event_f_flags);
  }
  
  int fanotify_mark(int fanotify_fd, unsigned flags, unsigned long long mask,
  	          int dfd, const char *pathname)
  {
 -	return syscall(SYS_fanotify_mark, fanotify_fd, flags, __SYSCALL_LL_E(mask), dfd, pathname);
-+	return syscall_redirect(SYS_fanotify_mark, fanotify_fd, flags,
-+				__SYSCALL_LL_E(mask), dfd, pathname);
++	return syscall_redirect(SYS_fanotify_mark, 5, (long)fanotify_fd,
++				(long)flags, (long)__SYSCALL_LL_E(mask),
++				(long)dfd, (long)pathname);
  }
  
 diff -u -p a/linux/mount.c b/linux/mount.c
 --- a/linux/mount.c
 +++ b/linux/mount.c
-@@ -3,15 +3,15 @@
+@@ -3,15 +3,16 @@
  
  int mount(const char *special, const char *dir, const char *fstype, unsigned long flags, const void *data)
  {
 -	return syscall(SYS_mount, special, dir, fstype, flags, data);
-+	return syscall_redirect(SYS_mount, special, dir, fstype, flags, data);
++	return syscall_redirect(SYS_mount, 5, (long)special, (long)dir,
++				(long)fstype, (long)flags, (long)data);
  }
  
  int umount(const char *special)
  {
 -	return syscall(SYS_umount2, special, 0);
-+	return syscall_redirect(SYS_umount2, special, 0);
++	return syscall_redirect(SYS_umount2, 2, (long)special, (long)0);
  }
  
  int umount2(const char *special, int flags)
  {
 -	return syscall(SYS_umount2, special, flags);
-+	return syscall_redirect(SYS_umount2, special, flags);
++	return syscall_redirect(SYS_umount2, 2, (long)special, (long)flags);
  }
 diff -u -p a/linux/chroot.c b/linux/chroot.c
 --- a/linux/chroot.c
@@ -2208,75 +2346,83 @@ diff -u -p a/linux/chroot.c b/linux/chroot.c
  int chroot(const char *path)
  {
 -	return syscall(SYS_chroot, path);
-+	return syscall_redirect(SYS_chroot, path);
++	return syscall_redirect(SYS_chroot, 1, (long)path);
  }
 diff -u -p a/linux/sendfile.c b/linux/sendfile.c
 --- a/linux/sendfile.c
 +++ b/linux/sendfile.c
-@@ -4,7 +4,7 @@
+@@ -4,7 +4,8 @@
  
  ssize_t sendfile(int out_fd, int in_fd, off_t *ofs, size_t count)
  {
 -	return syscall(SYS_sendfile, out_fd, in_fd, ofs, count);
-+	return syscall_redirect(SYS_sendfile, out_fd, in_fd, ofs, count);
++	return syscall_redirect(SYS_sendfile, 4, (long)out_fd, (long)in_fd,
++				(long)ofs, (long)count);
  }
  
  LFS64(sendfile);
 diff -u -p a/linux/eventfd.c b/linux/eventfd.c
 --- a/linux/eventfd.c
 +++ b/linux/eventfd.c
-@@ -5,9 +5,9 @@
+@@ -5,9 +5,10 @@
  
  int eventfd(unsigned int count, int flags)
  {
 -	int r = __syscall(SYS_eventfd2, count, flags);
-+	int r = syscall_redirect(SYS_eventfd2, count, flags);
++	int r = syscall_redirect(SYS_eventfd2, 2, (long)count, (long)flags);
  #ifdef SYS_eventfd
 -	if (r==-ENOSYS && !flags) r = __syscall(SYS_eventfd, count);
-+	if (r==-ENOSYS && !flags) r = syscall_redirect(SYS_eventfd, count);
++	if (r==-ENOSYS && !flags) r = syscall_redirect(SYS_eventfd, 1,
++						       (long)count);
  #endif
  	return __syscall_ret(r);
  }
 diff -u -p a/linux/signalfd.c b/linux/signalfd.c
 --- a/linux/signalfd.c
 +++ b/linux/signalfd.c
-@@ -6,15 +6,15 @@
+@@ -6,15 +6,19 @@
  
  int signalfd(int fd, const sigset_t *sigs, int flags)
  {
 -	int ret = __syscall(SYS_signalfd4, fd, sigs, _NSIG/8, flags);
-+	int ret = syscall_redirect(SYS_signalfd4, fd, sigs, _NSIG / 8, flags);
++	int ret = syscall_redirect(SYS_signalfd4, 4, (long)fd, (long)sigs,
++				   (long)(_NSIG / 8), (long)flags);
  #ifdef SYS_signalfd
  	if (ret != -ENOSYS) return __syscall_ret(ret);
 -	ret = __syscall(SYS_signalfd, fd, sigs, _NSIG/8);
-+	ret = syscall_redirect(SYS_signalfd, fd, sigs, _NSIG / 8);
++	ret = syscall_redirect(SYS_signalfd, 3, (long)fd, (long)sigs,
++			       (long)(_NSIG / 8));
  	if (ret >= 0) {
  		if (flags & SFD_CLOEXEC)
 -			__syscall(SYS_fcntl, ret, F_SETFD, FD_CLOEXEC);
-+			syscall_redirect(SYS_fcntl, ret, F_SETFD, FD_CLOEXEC);
++			syscall_redirect(SYS_fcntl, 3, (long)ret,
++					 (long)F_SETFD, (long)FD_CLOEXEC);
  		if (flags & SFD_NONBLOCK)
 -			__syscall(SYS_fcntl, ret, F_SETFL, O_NONBLOCK);
-+			syscall_redirect(SYS_fcntl, ret, F_SETFL, O_NONBLOCK);
++			syscall_redirect(SYS_fcntl, 3, (long)ret,
++					 (long)F_SETFL, (long)O_NONBLOCK);
  	}
  #endif
  	return __syscall_ret(ret);
 diff -u -p a/linux/process_vm.c b/linux/process_vm.c
 --- a/linux/process_vm.c
 +++ b/linux/process_vm.c
-@@ -4,10 +4,12 @@
+@@ -4,10 +4,14 @@
  
  ssize_t process_vm_writev(pid_t pid, const struct iovec *lvec, unsigned long liovcnt, const struct iovec *rvec, unsigned long riovcnt, unsigned long flags)
  {
 -	return syscall(SYS_process_vm_writev, pid, lvec, liovcnt, rvec, riovcnt, flags);
-+	return syscall_redirect(SYS_process_vm_writev, pid, lvec, liovcnt,
-+				rvec, riovcnt, flags);
++	return syscall_redirect(SYS_process_vm_writev, 6, (long)pid,
++				(long)lvec, (long)liovcnt, (long)rvec,
++				(long)riovcnt, (long)flags);
  }
  
  ssize_t process_vm_readv(pid_t pid, const struct iovec *lvec, unsigned long liovcnt, const struct iovec *rvec, unsigned long riovcnt, unsigned long flags)
  {
 -	return syscall(SYS_process_vm_readv, pid, lvec, liovcnt, rvec, riovcnt, flags);
-+	return syscall_redirect(SYS_process_vm_readv, pid, lvec, liovcnt,
-+				rvec, riovcnt, flags);
++	return syscall_redirect(SYS_process_vm_readv, 6, (long)pid,
++				(long)lvec, (long)liovcnt, (long)rvec,
++				(long)riovcnt, (long)flags);
  }
 diff -u -p a/linux/setgroups.c b/linux/setgroups.c
 --- a/linux/setgroups.c
@@ -2286,17 +2432,18 @@ diff -u -p a/linux/setgroups.c b/linux/setgroups.c
  int setgroups(size_t count, const gid_t list[])
  {
 -	return syscall(SYS_setgroups, count, list);
-+	return syscall_redirect(SYS_setgroups, count, list);
++	return syscall_redirect(SYS_setgroups, 2, (long)count, (long)list);
  }
 diff -u -p a/linux/readahead.c b/linux/readahead.c
 --- a/linux/readahead.c
 +++ b/linux/readahead.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  ssize_t readahead(int fd, off_t pos, size_t len)
  {
 -	return syscall(SYS_readahead, fd, __SYSCALL_LL_O(pos), len);
-+	return syscall_redirect(SYS_readahead, fd, __SYSCALL_LL_O(pos), len);
++	return syscall_redirect(SYS_readahead, 3, (long)fd,
++				(long)__SYSCALL_LL_O(pos), (long)len);
  }
 diff -u -p a/linux/vhangup.c b/linux/vhangup.c
 --- a/linux/vhangup.c
@@ -2306,7 +2453,7 @@ diff -u -p a/linux/vhangup.c b/linux/vhangup.c
  int vhangup(void)
  {
 -	return syscall(SYS_vhangup);
-+	return syscall_redirect(SYS_vhangup);
++	return syscall_redirect(SYS_vhangup, 0);
  }
 diff -u -p a/linux/flock.c b/linux/flock.c
 --- a/linux/flock.c
@@ -2316,30 +2463,32 @@ diff -u -p a/linux/flock.c b/linux/flock.c
  int flock(int fd, int op)
  {
 -	return syscall(SYS_flock, fd, op);
-+	return syscall_redirect(SYS_flock, fd, op);
++	return syscall_redirect(SYS_flock, 2, (long)fd, (long)op);
  }
 diff -u -p a/linux/reboot.c b/linux/reboot.c
 --- a/linux/reboot.c
 +++ b/linux/reboot.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int reboot(int type)
  {
 -	return syscall(SYS_reboot, 0xfee1dead, 672274793, type);
-+	return syscall_redirect(SYS_reboot, 0xfee1dead, 672274793, type);
++	return syscall_redirect(SYS_reboot, 3, (long)0xfee1dead,
++				(long)672274793, (long)type);
  }
 diff -u -p a/linux/epoll.c b/linux/epoll.c
 --- a/linux/epoll.c
 +++ b/linux/epoll.c
-@@ -10,23 +10,25 @@ int epoll_create(int size)
+@@ -10,23 +10,29 @@ int epoll_create(int size)
  
  int epoll_create1(int flags)
  {
 -	int r = __syscall(SYS_epoll_create1, flags);
-+	int r = syscall_redirect(SYS_epoll_create1, flags);
++	int r = syscall_redirect(SYS_epoll_create1, 1, (long)flags);
  #ifdef SYS_epoll_create
 -	if (r==-ENOSYS && !flags) r = __syscall(SYS_epoll_create, 1);
-+	if (r==-ENOSYS && !flags) r = syscall_redirect(SYS_epoll_create, 1);
++	if (r==-ENOSYS && !flags) r = syscall_redirect(SYS_epoll_create, 1,
++						       (long)1);
  #endif
  	return __syscall_ret(r);
  }
@@ -2347,18 +2496,21 @@ diff -u -p a/linux/epoll.c b/linux/epoll.c
  int epoll_ctl(int fd, int op, int fd2, struct epoll_event *ev)
  {
 -	return syscall(SYS_epoll_ctl, fd, op, fd2, ev);
-+	return syscall_redirect(SYS_epoll_ctl, fd, op, fd2, ev);
++	return syscall_redirect(SYS_epoll_ctl, 4, (long)fd, (long)op,
++				(long)fd2, (long)ev);
  }
  
  int epoll_pwait(int fd, struct epoll_event *ev, int cnt, int to, const sigset_t *sigs)
  {
 -	int r = __syscall(SYS_epoll_pwait, fd, ev, cnt, to, sigs, _NSIG/8);
-+	int r = syscall_redirect(SYS_epoll_pwait, fd, ev, cnt, to, sigs,
-+				 _NSIG / 8);
++	int r = syscall_redirect(SYS_epoll_pwait, 6, (long)fd, (long)ev,
++				 (long)cnt, (long)to, (long)sigs,
++				 (long)(_NSIG / 8));
  #ifdef SYS_epoll_wait
 -	if (r==-ENOSYS && !sigs) r = __syscall(SYS_epoll_wait, fd, ev, cnt, to);
-+	if (r==-ENOSYS && !sigs) r = syscall_redirect(SYS_epoll_wait, fd, ev,
-+						      cnt, to);
++	if (r==-ENOSYS && !sigs) r = syscall_redirect(SYS_epoll_wait, 4,
++						      (long)fd, (long)ev,
++						      (long)cnt, (long)to);
  #endif
  	return __syscall_ret(r);
  }
@@ -2370,20 +2522,21 @@ diff -u -p a/linux/prlimit.c b/linux/prlimit.c
  		new_limit = &tmp;
  	}
 -	r = syscall(SYS_prlimit64, pid, resource, new_limit, old_limit);
-+	r = syscall_redirect(SYS_prlimit64, pid, resource, new_limit,
-+			     old_limit);
++	r = syscall_redirect(SYS_prlimit64, 4, (long)pid, (long)resource,
++			     (long)new_limit, (long)old_limit);
  	if (!r && old_limit && SYSCALL_RLIM_INFINITY != RLIM_INFINITY) {
  		FIX(old_limit->rlim_cur);
  		FIX(old_limit->rlim_max);
 diff -u -p a/linux/vmsplice.c b/linux/vmsplice.c
 --- a/linux/vmsplice.c
 +++ b/linux/vmsplice.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  ssize_t vmsplice(int fd, const struct iovec *iov, size_t cnt, unsigned flags)
  {
 -	return syscall(SYS_vmsplice, fd, iov, cnt, flags);
-+	return syscall_redirect(SYS_vmsplice, fd, iov, cnt, flags);
++	return syscall_redirect(SYS_vmsplice, 4, (long)fd, (long)iov,
++				(long)cnt, (long)flags);
  }
 diff -u -p a/linux/settimeofday.c b/linux/settimeofday.c
 --- a/linux/settimeofday.c
@@ -2393,38 +2546,41 @@ diff -u -p a/linux/settimeofday.c b/linux/settimeofday.c
  int settimeofday(const struct timeval *tv, const struct timezone *tz)
  {
 -	return syscall(SYS_settimeofday, tv, 0);
-+	return syscall_redirect(SYS_settimeofday, tv, 0);
++	return syscall_redirect(SYS_settimeofday, 2, (long)tv, (long)0);
  }
 diff -u -p a/linux/cache.c b/linux/cache.c
 --- a/linux/cache.c
 +++ b/linux/cache.c
-@@ -4,7 +4,7 @@
+@@ -4,7 +4,8 @@
  #ifdef SYS_cacheflush
  int _flush_cache(void *addr, int len, int op)
  {
 -	return syscall(SYS_cacheflush, addr, len, op);
-+	return syscall_redirect(SYS_cacheflush, addr, len, op);
++	return syscall_redirect(SYS_cacheflush, 3, (long)addr, (long)len,
++				(long)op);
  }
  weak_alias(_flush_cache, cacheflush);
  #endif
-@@ -12,7 +12,7 @@ weak_alias(_flush_cache, cacheflush);
+@@ -12,7 +13,8 @@ weak_alias(_flush_cache, cacheflush);
  #ifdef SYS_cachectl
  int __cachectl(void *addr, int len, int op)
  {
 -	return syscall(SYS_cachectl, addr, len, op);
-+	return syscall_redirect(SYS_cachectl, addr, len, op);
++	return syscall_redirect(SYS_cachectl, 3, (long)addr, (long)len,
++				(long)op);
  }
  weak_alias(__cachectl, cachectl);
  #endif
 diff -u -p a/linux/clock_adjtime.c b/linux/clock_adjtime.c
 --- a/linux/clock_adjtime.c
 +++ b/linux/clock_adjtime.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int clock_adjtime (clockid_t clock_id, struct timex *utx)
  {
 -	return syscall(SYS_clock_adjtime, clock_id, utx);
-+	return syscall_redirect(SYS_clock_adjtime, clock_id, utx);
++	return syscall_redirect(SYS_clock_adjtime, 2, (long)clock_id,
++				(long)utx);
  }
 diff -u -p a/linux/swap.c b/linux/swap.c
 --- a/linux/swap.c
@@ -2434,23 +2590,24 @@ diff -u -p a/linux/swap.c b/linux/swap.c
  int swapon(const char *path, int flags)
  {
 -	return syscall(SYS_swapon, path, flags);
-+	return syscall_redirect(SYS_swapon, path, flags);
++	return syscall_redirect(SYS_swapon, 2, (long)path, (long)flags);
  }
  
  int swapoff(const char *path)
  {
 -	return syscall(SYS_swapoff, path);
-+	return syscall_redirect(SYS_swapoff, path);
++	return syscall_redirect(SYS_swapoff, 1, (long)path);
  }
 diff -u -p a/linux/prctl.c b/linux/prctl.c
 --- a/linux/prctl.c
 +++ b/linux/prctl.c
-@@ -10,5 +10,5 @@ int prctl(int op, ...)
+@@ -10,5 +10,6 @@ int prctl(int op, ...)
  	va_start(ap, op);
  	for (i=0; i<4; i++) x[i] = va_arg(ap, unsigned long);
  	va_end(ap);
 -	return syscall(SYS_prctl, op, x[0], x[1], x[2], x[3]);
-+	return syscall_redirect(SYS_prctl, op, x[0], x[1], x[2], x[3]);
++	return syscall_redirect(SYS_prctl, 5, (long)op, (long)x[0],
++				(long)x[1], (long)x[2], (long)x[3]);
  }
 diff -u -p a/linux/adjtime.c b/linux/adjtime.c
 --- a/linux/adjtime.c
@@ -2460,7 +2617,7 @@ diff -u -p a/linux/adjtime.c b/linux/adjtime.c
  		tx.modes = ADJ_OFFSET_SINGLESHOT;
  	}
 -	if (syscall(SYS_adjtimex, &tx) < 0) return -1;
-+	if (syscall_redirect(SYS_adjtimex, &tx) < 0) return -1;
++	if (syscall_redirect(SYS_adjtimex, 1, (long)&tx) < 0) return -1;
  	if (out) {
  		out->tv_sec = tx.offset / 1000000;
  		if ((out->tv_usec = tx.offset % 1000000) < 0) {
@@ -2472,7 +2629,7 @@ diff -u -p a/linux/sysinfo.c b/linux/sysinfo.c
  int __lsysinfo(struct sysinfo *info)
  {
 -	return syscall(SYS_sysinfo, info);
-+	return syscall_redirect(SYS_sysinfo, info);
++	return syscall_redirect(SYS_sysinfo, 1, (long)info);
  }
  
  weak_alias(__lsysinfo, sysinfo);
@@ -2484,51 +2641,55 @@ diff -u -p a/linux/setfsuid.c b/linux/setfsuid.c
  int setfsuid(uid_t uid)
  {
 -	return syscall(SYS_setfsuid, uid);
-+	return syscall_redirect(SYS_setfsuid, uid);
++	return syscall_redirect(SYS_setfsuid, 1, (long)uid);
  }
 diff -u -p a/linux/fallocate.c b/linux/fallocate.c
 --- a/linux/fallocate.c
 +++ b/linux/fallocate.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  
  int fallocate(int fd, int mode, off_t base, off_t len)
  {
 -	return syscall(SYS_fallocate, fd, mode, __SYSCALL_LL_E(base),
 -		__SYSCALL_LL_E(len));
-+	return syscall_redirect(SYS_fallocate, fd, mode, __SYSCALL_LL_E(base),
-+				__SYSCALL_LL_E(len));
++	return syscall_redirect(SYS_fallocate, 4, (long)fd, (long)mode,
++				(long)__SYSCALL_LL_E(base),
++				(long)__SYSCALL_LL_E(len));
  }
  
  #undef fallocate64
 diff -u -p a/linux/sync_file_range.c b/linux/sync_file_range.c
 --- a/linux/sync_file_range.c
 +++ b/linux/sync_file_range.c
-@@ -6,11 +6,11 @@
+@@ -6,11 +6,13 @@
  int sync_file_range(int fd, off_t pos, off_t len, unsigned flags)
  {
  #if defined(SYS_sync_file_range2)
 -	return syscall(SYS_sync_file_range2, fd, flags,
 -		__SYSCALL_LL_E(pos), __SYSCALL_LL_E(len));
-+	return syscall_redirect(SYS_sync_file_range2, fd, flags,
-+				__SYSCALL_LL_E(pos), __SYSCALL_LL_E(len));
++	return syscall_redirect(SYS_sync_file_range2, 4, (long)fd,
++				(long)flags, (long)__SYSCALL_LL_E(pos),
++				(long)__SYSCALL_LL_E(len));
  #elif defined(SYS_sync_file_range)
 -	return syscall(SYS_sync_file_range, fd,
 -		__SYSCALL_LL_O(pos), __SYSCALL_LL_E(len), flags);
-+	return syscall_redirect(SYS_sync_file_range, fd, __SYSCALL_LL_O(pos),
-+				__SYSCALL_LL_E(len), flags);
++	return syscall_redirect(SYS_sync_file_range, 4, (long)fd,
++				(long)__SYSCALL_LL_O(pos),
++				(long)__SYSCALL_LL_E(len), (long)flags);
  #else
  	return __syscall_ret(-ENOSYS);
  #endif
 diff -u -p a/linux/splice.c b/linux/splice.c
 --- a/linux/splice.c
 +++ b/linux/splice.c
-@@ -4,5 +4,6 @@
+@@ -4,5 +4,7 @@
  
  ssize_t splice(int fd_in, off_t *off_in, int fd_out, off_t *off_out, size_t len, unsigned flags)
  {
 -	return syscall(SYS_splice, fd_in, off_in, fd_out, off_out, len, flags);
-+	return syscall_redirect(SYS_splice, fd_in, off_in, fd_out, off_out,
-+				len, flags);
++	return syscall_redirect(SYS_splice, 6, (long)fd_in, (long)off_in,
++				(long)fd_out, (long)off_out, (long)len,
++				(long)flags);
  }
 diff -u -p a/linux/cap.c b/linux/cap.c
 --- a/linux/cap.c
@@ -2538,13 +2699,13 @@ diff -u -p a/linux/cap.c b/linux/cap.c
  int capset(void *a, void *b)
  {
 -	return syscall(SYS_capset, a, b);
-+	return syscall_redirect(SYS_capset, a, b);
++	return syscall_redirect(SYS_capset, 2, (long)a, (long)b);
  }
  
  int capget(void *a, void *b)
  {
 -	return syscall(SYS_capget, a, b);
-+	return syscall_redirect(SYS_capget, a, b);
++	return syscall_redirect(SYS_capget, 2, (long)a, (long)b);
  }
 diff -u -p a/linux/ppoll.c b/linux/ppoll.c
 --- a/linux/ppoll.c
@@ -2555,20 +2716,21 @@ diff -u -p a/linux/ppoll.c b/linux/ppoll.c
  {
 -	return syscall_cp(SYS_ppoll, fds, n,
 -		to ? (struct timespec []){*to} : 0, mask, _NSIG/8);
-+	return syscall_redirect(SYS_ppoll, fds, n, to ? (struct timespec[]){
-+			*to,
-+} : 0, mask, _NSIG / 8);
++	return syscall_redirect(SYS_ppoll, 5, (long)fds, (long)n, (long)(to ? (struct timespec[]){
++				*to,
++} : 0), (long)mask, (long)(_NSIG / 8));
  }
 diff -u -p a/linux/remap_file_pages.c b/linux/remap_file_pages.c
 --- a/linux/remap_file_pages.c
 +++ b/linux/remap_file_pages.c
-@@ -4,5 +4,6 @@
+@@ -4,5 +4,7 @@
  
  int remap_file_pages(void *addr, size_t size, int prot, size_t pgoff, int flags)
  {
 -	return syscall(SYS_remap_file_pages, addr, size, prot, pgoff, flags);
-+	return syscall_redirect(SYS_remap_file_pages, addr, size, prot, pgoff,
-+				flags);
++	return syscall_redirect(SYS_remap_file_pages, 5, (long)addr,
++				(long)size, (long)prot, (long)pgoff,
++				(long)flags);
  }
 diff -u -p a/linux/module.c b/linux/module.c
 --- a/linux/module.c
@@ -2578,102 +2740,111 @@ diff -u -p a/linux/module.c b/linux/module.c
  int init_module(void *a, unsigned long b, const char *c)
  {
 -	return syscall(SYS_init_module, a, b, c);
-+	return syscall_redirect(SYS_init_module, a, b, c);
++	return syscall_redirect(SYS_init_module, 3, (long)a, (long)b, (long)c);
  }
  
  int delete_module(const char *a, unsigned b)
  {
 -	return syscall(SYS_delete_module, a, b);
-+	return syscall_redirect(SYS_delete_module, a, b);
++	return syscall_redirect(SYS_delete_module, 2, (long)a, (long)b);
  }
 diff -u -p a/linux/ptrace.c b/linux/ptrace.c
 --- a/linux/ptrace.c
 +++ b/linux/ptrace.c
-@@ -22,7 +22,7 @@ long ptrace(int req, ...)
+@@ -22,7 +22,8 @@ long ptrace(int req, ...)
  	va_end(ap);
  
  	if (req-1U < 3) data = &result;
 -	ret = syscall(SYS_ptrace, req, pid, addr, data, addr2);
-+	ret = syscall_redirect(SYS_ptrace, req, pid, addr, data, addr2);
++	ret = syscall_redirect(SYS_ptrace, 5, (long)req, (long)pid,
++			       (long)addr, (long)data, (long)addr2);
  
  	if (ret < 0 || req-1U >= 3) return ret;
  	return result;
 diff -u -p a/linux/xattr.c b/linux/xattr.c
 --- a/linux/xattr.c
 +++ b/linux/xattr.c
-@@ -3,60 +3,61 @@
+@@ -3,60 +3,69 @@
  
  ssize_t getxattr(const char *path, const char *name, void *value, size_t size)
  {
 -	return syscall(SYS_getxattr, path, name, value, size);
-+	return syscall_redirect(SYS_getxattr, path, name, value, size);
++	return syscall_redirect(SYS_getxattr, 4, (long)path, (long)name,
++				(long)value, (long)size);
  }
  
  ssize_t lgetxattr(const char *path, const char *name, void *value, size_t size)
  {
 -	return syscall(SYS_lgetxattr, path, name, value, size);
-+	return syscall_redirect(SYS_lgetxattr, path, name, value, size);
++	return syscall_redirect(SYS_lgetxattr, 4, (long)path, (long)name,
++				(long)value, (long)size);
  }
  
  ssize_t fgetxattr(int filedes, const char *name, void *value, size_t size)
  {
 -	return syscall(SYS_fgetxattr, filedes, name, value, size);
-+	return syscall_redirect(SYS_fgetxattr, filedes, name, value, size);
++	return syscall_redirect(SYS_fgetxattr, 4, (long)filedes, (long)name,
++				(long)value, (long)size);
  }
  
  ssize_t listxattr(const char *path, char *list, size_t size)
  {
 -	return syscall(SYS_listxattr, path, list, size);
-+	return syscall_redirect(SYS_listxattr, path, list, size);
++	return syscall_redirect(SYS_listxattr, 3, (long)path, (long)list,
++				(long)size);
  }
  
  ssize_t llistxattr(const char *path, char *list, size_t size)
  {
 -	return syscall(SYS_llistxattr, path, list, size);
-+	return syscall_redirect(SYS_llistxattr, path, list, size);
++	return syscall_redirect(SYS_llistxattr, 3, (long)path, (long)list,
++				(long)size);
  }
  
  ssize_t flistxattr(int filedes, char *list, size_t size)
  {
 -	return syscall(SYS_flistxattr, filedes, list, size);
-+	return syscall_redirect(SYS_flistxattr, filedes, list, size);
++	return syscall_redirect(SYS_flistxattr, 3, (long)filedes, (long)list,
++				(long)size);
  }
  
  int setxattr(const char *path, const char *name, const void *value, size_t size, int flags)
  {
 -	return syscall(SYS_setxattr, path, name, value, size, flags);
-+	return syscall_redirect(SYS_setxattr, path, name, value, size, flags);
++	return syscall_redirect(SYS_setxattr, 5, (long)path, (long)name,
++				(long)value, (long)size, (long)flags);
  }
  
  int lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags)
  {
 -	return syscall(SYS_lsetxattr, path, name, value, size, flags);
-+	return syscall_redirect(SYS_lsetxattr, path, name, value, size, flags);
++	return syscall_redirect(SYS_lsetxattr, 5, (long)path, (long)name,
++				(long)value, (long)size, (long)flags);
  }
  
  int fsetxattr(int filedes, const char *name, const void *value, size_t size, int flags)
  {
 -	return syscall(SYS_fsetxattr, filedes, name, value, size, flags);
-+	return syscall_redirect(SYS_fsetxattr, filedes, name, value, size,
-+				flags);
++	return syscall_redirect(SYS_fsetxattr, 5, (long)filedes, (long)name,
++				(long)value, (long)size, (long)flags);
  }
  
  int removexattr(const char *path, const char *name)
  {
 -	return syscall(SYS_removexattr, path, name);
-+	return syscall_redirect(SYS_removexattr, path, name);
++	return syscall_redirect(SYS_removexattr, 2, (long)path, (long)name);
  }
  
  int lremovexattr(const char *path, const char *name)
  {
 -	return syscall(SYS_lremovexattr, path, name);
-+	return syscall_redirect(SYS_lremovexattr, path, name);
++	return syscall_redirect(SYS_lremovexattr, 2, (long)path, (long)name);
  }
  
  int fremovexattr(int fd, const char *name)
  {
 -	return syscall(SYS_fremovexattr, fd, name);
-+	return syscall_redirect(SYS_fremovexattr, fd, name);
++	return syscall_redirect(SYS_fremovexattr, 2, (long)fd, (long)name);
  }
 diff -u -p a/linux/pivot_root.c b/linux/pivot_root.c
 --- a/linux/pivot_root.c
@@ -2683,17 +2854,18 @@ diff -u -p a/linux/pivot_root.c b/linux/pivot_root.c
  int pivot_root(const char *new, const char *old)
  {
 -	return syscall(SYS_pivot_root, new, old);
-+	return syscall_redirect(SYS_pivot_root, new, old);
++	return syscall_redirect(SYS_pivot_root, 2, (long)new, (long)old);
  }
 diff -u -p a/linux/tee.c b/linux/tee.c
 --- a/linux/tee.c
 +++ b/linux/tee.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  ssize_t tee(int src, int dest, size_t len, unsigned flags)
  {
 -	return syscall(SYS_tee, src, dest, len, flags);
-+	return syscall_redirect(SYS_tee, src, dest, len, flags);
++	return syscall_redirect(SYS_tee, 4, (long)src, (long)dest, (long)len,
++				(long)flags);
  }
 diff -u -p a/linux/setfsgid.c b/linux/setfsgid.c
 --- a/linux/setfsgid.c
@@ -2703,7 +2875,7 @@ diff -u -p a/linux/setfsgid.c b/linux/setfsgid.c
  int setfsgid(gid_t gid)
  {
 -	return syscall(SYS_setfsgid, gid);
-+	return syscall_redirect(SYS_setfsgid, gid);
++	return syscall_redirect(SYS_setfsgid, 1, (long)gid);
  }
 diff -u -p a/linux/x32/sysinfo.c b/linux/x32/sysinfo.c
 --- a/linux/x32/sysinfo.c
@@ -2713,7 +2885,7 @@ diff -u -p a/linux/x32/sysinfo.c b/linux/x32/sysinfo.c
  {
  	struct kernel_sysinfo tmp;
 -	int ret = syscall(SYS_sysinfo, &tmp);
-+	int ret = syscall_redirect(SYS_sysinfo, &tmp);
++	int ret = syscall_redirect(SYS_sysinfo, 1, (long)&tmp);
  	if(ret == -1) return ret;
  	info->uptime = tmp.uptime;
  	info->loads[0] = tmp.loads[0];
@@ -2725,7 +2897,7 @@ diff -u -p a/linux/syncfs.c b/linux/syncfs.c
  int syncfs(int fd)
  {
 -	return syscall(SYS_syncfs, fd);
-+	return syscall_redirect(SYS_syncfs, fd);
++	return syscall_redirect(SYS_syncfs, 1, (long)fd);
  }
 diff -u -p a/linux/unshare.c b/linux/unshare.c
 --- a/linux/unshare.c
@@ -2735,7 +2907,7 @@ diff -u -p a/linux/unshare.c b/linux/unshare.c
  int unshare(int flags)
  {
 -	return syscall(SYS_unshare, flags);
-+	return syscall_redirect(SYS_unshare, flags);
++	return syscall_redirect(SYS_unshare, 1, (long)flags);
  }
 diff -u -p a/linux/arch_prctl.c b/linux/arch_prctl.c
 --- a/linux/arch_prctl.c
@@ -2745,7 +2917,7 @@ diff -u -p a/linux/arch_prctl.c b/linux/arch_prctl.c
  int arch_prctl(int code, unsigned long addr)
  {
 -	return syscall(SYS_arch_prctl, code, addr);
-+	return syscall_redirect(SYS_arch_prctl, code, addr);
++	return syscall_redirect(SYS_arch_prctl, 2, (long)code, (long)addr);
  }
  #endif
 diff -u -p a/linux/sethostname.c b/linux/sethostname.c
@@ -2756,50 +2928,54 @@ diff -u -p a/linux/sethostname.c b/linux/sethostname.c
  int sethostname(const char *name, size_t len)
  {
 -	return syscall(SYS_sethostname, name, len);
-+	return syscall_redirect(SYS_sethostname, name, len);
++	return syscall_redirect(SYS_sethostname, 2, (long)name, (long)len);
  }
 diff -u -p a/linux/ioperm.c b/linux/ioperm.c
 --- a/linux/ioperm.c
 +++ b/linux/ioperm.c
-@@ -5,6 +5,6 @@
+@@ -5,6 +5,7 @@
  
  int ioperm(unsigned long from, unsigned long num, int turn_on)
  {
 -	return syscall(SYS_ioperm, from, num, turn_on);
-+	return syscall_redirect(SYS_ioperm, from, num, turn_on);
++	return syscall_redirect(SYS_ioperm, 3, (long)from, (long)num,
++				(long)turn_on);
  }
  #endif
 diff -u -p a/linux/wait4.c b/linux/wait4.c
 --- a/linux/wait4.c
 +++ b/linux/wait4.c
-@@ -5,5 +5,5 @@
+@@ -5,5 +5,6 @@
  
  pid_t wait4(pid_t pid, int *status, int options, struct rusage *usage)
  {
 -	return syscall(SYS_wait4, pid, status, options, usage);
-+	return syscall_redirect(SYS_wait4, pid, status, options, usage);
++	return syscall_redirect(SYS_wait4, 4, (long)pid, (long)status,
++				(long)options, (long)usage);
  }
 diff -u -p a/linux/timerfd.c b/linux/timerfd.c
 --- a/linux/timerfd.c
 +++ b/linux/timerfd.c
-@@ -3,15 +3,15 @@
+@@ -3,15 +3,17 @@
  
  int timerfd_create(int clockid, int flags)
  {
 -	return syscall(SYS_timerfd_create, clockid, flags);
-+	return syscall_redirect(SYS_timerfd_create, clockid, flags);
++	return syscall_redirect(SYS_timerfd_create, 2, (long)clockid,
++				(long)flags);
  }
  
  int timerfd_settime(int fd, int flags, const struct itimerspec *new, struct itimerspec *old)
  {
 -	return syscall(SYS_timerfd_settime, fd, flags, new, old);
-+	return syscall_redirect(SYS_timerfd_settime, fd, flags, new, old);
++	return syscall_redirect(SYS_timerfd_settime, 4, (long)fd, (long)flags,
++				(long)new, (long)old);
  }
  
  int timerfd_gettime(int fd, struct itimerspec *cur)
  {
 -	return syscall(SYS_timerfd_gettime, fd, cur);
-+	return syscall_redirect(SYS_timerfd_gettime, fd, cur);
++	return syscall_redirect(SYS_timerfd_gettime, 2, (long)fd, (long)cur);
  }
 diff -u -p a/linux/sbrk.c b/linux/sbrk.c
 --- a/linux/sbrk.c
@@ -2809,29 +2985,30 @@ diff -u -p a/linux/sbrk.c b/linux/sbrk.c
  {
  	if (inc) return (void *)__syscall_ret(-ENOMEM);
 -	return (void *)__syscall(SYS_brk, 0);
-+	return (void *)syscall_redirect(SYS_brk, 0);
++	return (void *)syscall_redirect(SYS_brk, 1, (long)0);
  }
 diff -u -p a/stat/utimensat.c b/stat/utimensat.c
 --- a/stat/utimensat.c
 +++ b/stat/utimensat.c
-@@ -6,7 +6,7 @@
+@@ -6,7 +6,8 @@
  
  int utimensat(int fd, const char *path, const struct timespec times[2], int flags)
  {
 -	int r = __syscall(SYS_utimensat, fd, path, times, flags);
-+	int r = syscall_redirect(SYS_utimensat, fd, path, times, flags);
++	int r = syscall_redirect(SYS_utimensat, 4, (long)fd, (long)path,
++				 (long)times, (long)flags);
  #ifdef SYS_futimesat
  	if (r != -ENOSYS || flags) return __syscall_ret(r);
  	struct timeval *tv = 0, tmp[2];
-@@ -29,9 +29,9 @@ int utimensat(int fd, const char *path,
+@@ -29,9 +30,9 @@ int utimensat(int fd, const char *path,
  		}
  	}
  
 -	r = __syscall(SYS_futimesat, fd, path, tv);
-+	r = syscall_redirect(SYS_futimesat, fd, path, tv);
++	r = syscall_redirect(SYS_futimesat, 3, (long)fd, (long)path, (long)tv);
  	if (r != -ENOSYS || fd != AT_FDCWD) return __syscall_ret(r);
 -	r = __syscall(SYS_utimes, path, tv);
-+	r = syscall_redirect(SYS_utimes, path, tv);
++	r = syscall_redirect(SYS_utimes, 2, (long)path, (long)tv);
  #endif
  	return __syscall_ret(r);
  }
@@ -2843,89 +3020,94 @@ diff -u -p a/stat/lstat.c b/stat/lstat.c
  {
  #ifdef SYS_lstat
 -	return syscall(SYS_lstat, path, buf);
-+	return syscall_redirect(SYS_lstat, path, buf);
++	return syscall_redirect(SYS_lstat, 2, (long)path, (long)buf);
  #else
 -	return syscall(SYS_fstatat, AT_FDCWD, path, buf, AT_SYMLINK_NOFOLLOW);
-+	return syscall_redirect(SYS_fstatat, AT_FDCWD, path, buf,
-+				AT_SYMLINK_NOFOLLOW);
++	return syscall_redirect(SYS_fstatat, 4, (long)AT_FDCWD, (long)path,
++				(long)buf, (long)AT_SYMLINK_NOFOLLOW);
  #endif
  }
  
 diff -u -p a/stat/fstat.c b/stat/fstat.c
 --- a/stat/fstat.c
 +++ b/stat/fstat.c
-@@ -8,16 +8,16 @@ void __procfdname(char *, unsigned);
+@@ -8,16 +8,17 @@ void __procfdname(char *, unsigned);
  
  int fstat(int fd, struct stat *st)
  {
 -	int ret = __syscall(SYS_fstat, fd, st);
 -	if (ret != -EBADF || __syscall(SYS_fcntl, fd, F_GETFD) < 0)
-+	int ret = syscall_redirect(SYS_fstat, fd, st);
-+	if (ret != -EBADF || syscall_redirect(SYS_fcntl, fd, F_GETFD) < 0)
++	int ret = syscall_redirect(SYS_fstat, 2, (long)fd, (long)st);
++	if (ret != -EBADF || syscall_redirect(SYS_fcntl, 2, (long)fd, (long)F_GETFD) < 0)
  		return __syscall_ret(ret);
  
  	char buf[15+3*sizeof(int)];
  	__procfdname(buf, fd);
  #ifdef SYS_stat
 -	return syscall(SYS_stat, buf, st);
-+	return syscall_redirect(SYS_stat, buf, st);
++	return syscall_redirect(SYS_stat, 2, (long)buf, (long)st);
  #else
 -	return syscall(SYS_fstatat, AT_FDCWD, buf, st, 0);
-+	return syscall_redirect(SYS_fstatat, AT_FDCWD, buf, st, 0);
++	return syscall_redirect(SYS_fstatat, 4, (long)AT_FDCWD, (long)buf,
++				(long)st, (long)0);
  #endif
  }
  
 diff -u -p a/stat/stat.c b/stat/stat.c
 --- a/stat/stat.c
 +++ b/stat/stat.c
-@@ -6,9 +6,9 @@
+@@ -6,9 +6,10 @@
  int stat(const char *restrict path, struct stat *restrict buf)
  {
  #ifdef SYS_stat
 -	return syscall(SYS_stat, path, buf);
-+	return syscall_redirect(SYS_stat, path, buf);
++	return syscall_redirect(SYS_stat, 2, (long)path, (long)buf);
  #else
 -	return syscall(SYS_fstatat, AT_FDCWD, path, buf, 0);
-+	return syscall_redirect(SYS_fstatat, AT_FDCWD, path, buf, 0);
++	return syscall_redirect(SYS_fstatat, 4, (long)AT_FDCWD, (long)path,
++				(long)buf, (long)0);
  #endif
  }
  
 diff -u -p a/stat/fstatat.c b/stat/fstatat.c
 --- a/stat/fstatat.c
 +++ b/stat/fstatat.c
-@@ -4,7 +4,7 @@
+@@ -4,7 +4,8 @@
  
  int fstatat(int fd, const char *restrict path, struct stat *restrict buf, int flag)
  {
 -	return syscall(SYS_fstatat, fd, path, buf, flag);
-+	return syscall_redirect(SYS_fstatat, fd, path, buf, flag);
++	return syscall_redirect(SYS_fstatat, 4, (long)fd, (long)path,
++				(long)buf, (long)flag);
  }
  
  LFS64(fstatat);
 diff -u -p a/stat/statvfs.c b/stat/statvfs.c
 --- a/stat/statvfs.c
 +++ b/stat/statvfs.c
-@@ -7,9 +7,9 @@ int __statfs(const char *path, struct st
+@@ -7,9 +7,10 @@ int __statfs(const char *path, struct st
  {
  	*buf = (struct statfs){0};
  #ifdef SYS_statfs64
 -	return syscall(SYS_statfs64, path, sizeof *buf, buf);
-+	return syscall_redirect(SYS_statfs64, path, sizeof *buf, buf);
++	return syscall_redirect(SYS_statfs64, 3, (long)path,
++				(long)sizeof *buf, (long)buf);
  #else
 -	return syscall(SYS_statfs, path, buf);
-+	return syscall_redirect(SYS_statfs, path, buf);
++	return syscall_redirect(SYS_statfs, 2, (long)path, (long)buf);
  #endif
  }
  
-@@ -17,9 +17,9 @@ int __fstatfs(int fd, struct statfs *buf
+@@ -17,9 +18,10 @@ int __fstatfs(int fd, struct statfs *buf
  {
  	*buf = (struct statfs){0};
  #ifdef SYS_fstatfs64
 -	return syscall(SYS_fstatfs64, fd, sizeof *buf, buf);
-+	return syscall_redirect(SYS_fstatfs64, fd, sizeof *buf, buf);
++	return syscall_redirect(SYS_fstatfs64, 3, (long)fd, (long)sizeof *buf,
++				(long)buf);
  #else
 -	return syscall(SYS_fstatfs, fd, buf);
-+	return syscall_redirect(SYS_fstatfs, fd, buf);
++	return syscall_redirect(SYS_fstatfs, 2, (long)fd, (long)buf);
  #endif
  }
  
@@ -2937,103 +3119,109 @@ diff -u -p a/stat/umask.c b/stat/umask.c
  mode_t umask(mode_t mode)
  {
 -	return syscall(SYS_umask, mode);
-+	return syscall_redirect(SYS_umask, mode);
++	return syscall_redirect(SYS_umask, 1, (long)mode);
  }
 diff -u -p a/stat/mknodat.c b/stat/mknodat.c
 --- a/stat/mknodat.c
 +++ b/stat/mknodat.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int mknodat(int fd, const char *path, mode_t mode, dev_t dev)
  {
 -	return syscall(SYS_mknodat, fd, path, mode, dev);
-+	return syscall_redirect(SYS_mknodat, fd, path, mode, dev);
++	return syscall_redirect(SYS_mknodat, 4, (long)fd, (long)path,
++				(long)mode, (long)dev);
  }
 diff -u -p a/stat/mkdir.c b/stat/mkdir.c
 --- a/stat/mkdir.c
 +++ b/stat/mkdir.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  int mkdir(const char *path, mode_t mode)
  {
  #ifdef SYS_mkdir
 -	return syscall(SYS_mkdir, path, mode);
-+	return syscall_redirect(SYS_mkdir, path, mode);
++	return syscall_redirect(SYS_mkdir, 2, (long)path, (long)mode);
  #else
 -	return syscall(SYS_mkdirat, AT_FDCWD, path, mode);
-+	return syscall_redirect(SYS_mkdirat, AT_FDCWD, path, mode);
++	return syscall_redirect(SYS_mkdirat, 3, (long)AT_FDCWD, (long)path,
++				(long)mode);
  #endif
  }
 diff -u -p a/stat/fchmod.c b/stat/fchmod.c
 --- a/stat/fchmod.c
 +++ b/stat/fchmod.c
-@@ -7,15 +7,15 @@ void __procfdname(char *, unsigned);
+@@ -7,15 +7,16 @@ void __procfdname(char *, unsigned);
  
  int fchmod(int fd, mode_t mode)
  {
 -	int ret = __syscall(SYS_fchmod, fd, mode);
 -	if (ret != -EBADF || __syscall(SYS_fcntl, fd, F_GETFD) < 0)
-+	int ret = syscall_redirect(SYS_fchmod, fd, mode);
-+	if (ret != -EBADF || syscall_redirect(SYS_fcntl, fd, F_GETFD) < 0)
++	int ret = syscall_redirect(SYS_fchmod, 2, (long)fd, (long)mode);
++	if (ret != -EBADF || syscall_redirect(SYS_fcntl, 2, (long)fd, (long)F_GETFD) < 0)
  		return __syscall_ret(ret);
  
  	char buf[15+3*sizeof(int)];
  	__procfdname(buf, fd);
  #ifdef SYS_chmod
 -	return syscall(SYS_chmod, buf, mode);
-+	return syscall_redirect(SYS_chmod, buf, mode);
++	return syscall_redirect(SYS_chmod, 2, (long)buf, (long)mode);
  #else
 -	return syscall(SYS_fchmodat, AT_FDCWD, buf, mode);
-+	return syscall_redirect(SYS_fchmodat, AT_FDCWD, buf, mode);
++	return syscall_redirect(SYS_fchmodat, 3, (long)AT_FDCWD, (long)buf,
++				(long)mode);
  #endif
  }
 diff -u -p a/stat/mkdirat.c b/stat/mkdirat.c
 --- a/stat/mkdirat.c
 +++ b/stat/mkdirat.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int mkdirat(int fd, const char *path, mode_t mode)
  {
 -	return syscall(SYS_mkdirat, fd, path, mode);
-+	return syscall_redirect(SYS_mkdirat, fd, path, mode);
++	return syscall_redirect(SYS_mkdirat, 3, (long)fd, (long)path,
++				(long)mode);
  }
 diff -u -p a/stat/chmod.c b/stat/chmod.c
 --- a/stat/chmod.c
 +++ b/stat/chmod.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  int chmod(const char *path, mode_t mode)
  {
  #ifdef SYS_chmod
 -	return syscall(SYS_chmod, path, mode);
-+	return syscall_redirect(SYS_chmod, path, mode);
++	return syscall_redirect(SYS_chmod, 2, (long)path, (long)mode);
  #else
 -	return syscall(SYS_fchmodat, AT_FDCWD, path, mode);
-+	return syscall_redirect(SYS_fchmodat, AT_FDCWD, path, mode);
++	return syscall_redirect(SYS_fchmodat, 3, (long)AT_FDCWD, (long)path,
++				(long)mode);
  #endif
  }
 diff -u -p a/stat/fchmodat.c b/stat/fchmodat.c
 --- a/stat/fchmodat.c
 +++ b/stat/fchmodat.c
-@@ -7,7 +7,7 @@ void __procfdname(char *, unsigned);
+@@ -7,7 +7,8 @@ void __procfdname(char *, unsigned);
  
  int fchmodat(int fd, const char *path, mode_t mode, int flag)
  {
 -	if (!flag) return syscall(SYS_fchmodat, fd, path, mode, flag);
-+	if (!flag) return syscall_redirect(SYS_fchmodat, fd, path, mode, flag);
++	if (!flag) return syscall_redirect(SYS_fchmodat, 4, (long)fd,
++					   (long)path, (long)mode, (long)flag);
  
  	if (flag != AT_SYMLINK_NOFOLLOW)
  		return __syscall_ret(-EINVAL);
-@@ -16,24 +16,25 @@ int fchmodat(int fd, const char *path, m
+@@ -16,24 +17,26 @@ int fchmodat(int fd, const char *path, m
  	int ret, fd2;
  	char proc[15+3*sizeof(int)];
  
 -	if ((ret = __syscall(SYS_fstatat, fd, path, &st, flag)))
-+	if ((ret = syscall_redirect(SYS_fstatat, fd, path, &st, flag)))
++	if ((ret = syscall_redirect(SYS_fstatat, 4, (long)fd, (long)path, (long)&st, (long)flag)))
  		return __syscall_ret(ret);
  	if (S_ISLNK(st.st_mode))
  		return __syscall_ret(-EOPNOTSUPP);
  
 -	if ((fd2 = __syscall(SYS_openat, fd, path, O_RDONLY|O_PATH|O_NOFOLLOW|O_NOCTTY|O_CLOEXEC)) < 0) {
-+	if ((fd2 = syscall_redirect(SYS_openat, fd, path, O_RDONLY | O_PATH | O_NOFOLLOW | O_NOCTTY | O_CLOEXEC)) < 0) {
++	if ((fd2 = syscall_redirect(SYS_openat, 3, (long)fd, (long)path, (long)(O_RDONLY | O_PATH | O_NOFOLLOW | O_NOCTTY | O_CLOEXEC))) < 0) {
  		if (fd2 == -ELOOP)
  			return __syscall_ret(-EOPNOTSUPP);
  		return __syscall_ret(fd2);
@@ -3041,30 +3229,33 @@ diff -u -p a/stat/fchmodat.c b/stat/fchmodat.c
  
  	__procfdname(proc, fd2);
 -	ret = __syscall(SYS_fstatat, AT_FDCWD, proc, &st, 0);
-+	ret = syscall_redirect(SYS_fstatat, AT_FDCWD, proc, &st, 0);
++	ret = syscall_redirect(SYS_fstatat, 4, (long)AT_FDCWD, (long)proc,
++			       (long)&st, (long)0);
  	if (!ret) {
  		if (S_ISLNK(st.st_mode)) ret = -EOPNOTSUPP;
 -		else ret = __syscall(SYS_fchmodat, AT_FDCWD, proc, mode);
-+		else ret = syscall_redirect(SYS_fchmodat, AT_FDCWD, proc,
-+					    mode);
++		else ret = syscall_redirect(SYS_fchmodat, 3, (long)AT_FDCWD,
++					    (long)proc, (long)mode);
  	}
  
 -	__syscall(SYS_close, fd2);
-+	syscall_redirect(SYS_close, fd2);
++	syscall_redirect(SYS_close, 1, (long)fd2);
  	return __syscall_ret(ret);
  }
 diff -u -p a/stat/mknod.c b/stat/mknod.c
 --- a/stat/mknod.c
 +++ b/stat/mknod.c
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,10 @@
  int mknod(const char *path, mode_t mode, dev_t dev)
  {
  #ifdef SYS_mknod
 -	return syscall(SYS_mknod, path, mode, dev);
-+	return syscall_redirect(SYS_mknod, path, mode, dev);
++	return syscall_redirect(SYS_mknod, 3, (long)path, (long)mode,
++				(long)dev);
  #else
 -	return syscall(SYS_mknodat, AT_FDCWD, path, mode, dev);
-+	return syscall_redirect(SYS_mknodat, AT_FDCWD, path, mode, dev);
++	return syscall_redirect(SYS_mknodat, 4, (long)AT_FDCWD, (long)path,
++				(long)mode, (long)dev);
  #endif
  }
 diff -u -p a/thread/synccall.c b/thread/synccall.c
@@ -3075,15 +3266,15 @@ diff -u -p a/thread/synccall.c b/thread/synccall.c
  	sem_init(&ch.caller_sem, 0, 0);
  
 -	ch.tid = __syscall(SYS_gettid);
-+	ch.tid = syscall_redirect(SYS_gettid);
++	ch.tid = syscall_redirect(SYS_gettid, 0);
  
  	do ch.next = head;
  	while (a_cas_p(&head, ch.next, &ch) != ch.next);
  
  	if (a_cas(&target_tid, ch.tid, 0) == (ch.tid | 0x80000000))
 -		__syscall(SYS_futex, &target_tid, FUTEX_UNLOCK_PI|FUTEX_PRIVATE);
-+		syscall_redirect(SYS_futex, &target_tid,
-+				 FUTEX_UNLOCK_PI | FUTEX_PRIVATE);
++		syscall_redirect(SYS_futex, 2, (long)&target_tid,
++				 (long)(FUTEX_UNLOCK_PI | FUTEX_PRIVATE));
  
  	sem_wait(&ch.target_sem);
  	callback(context);
@@ -3093,8 +3284,8 @@ diff -u -p a/thread/synccall.c b/thread/synccall.c
  
 -	pid = __syscall(SYS_getpid);
 -	self = __syscall(SYS_gettid);
-+	pid = syscall_redirect(SYS_getpid);
-+	self = syscall_redirect(SYS_gettid);
++	pid = syscall_redirect(SYS_getpid, 0);
++	self = syscall_redirect(SYS_gettid, 0);
  
  	/* Since opendir is not AS-safe, the DIR needs to be setup manually
  	 * in automatic storage. Thankfully this is easy. */
@@ -3103,7 +3294,7 @@ diff -u -p a/thread/synccall.c b/thread/synccall.c
  	 * part of the logic. */
  	for (i=libc.threads_minus_1; i; i--)
 -		__syscall(SYS_kill, pid, SIGSYNCCALL);
-+		syscall_redirect(SYS_kill, pid, SIGSYNCCALL);
++		syscall_redirect(SYS_kill, 2, (long)pid, (long)SIGSYNCCALL);
  
  	/* Loop scanning the kernel-provided thread list until it shows no
  	 * threads that have not already replied to the signal. */
@@ -3112,8 +3303,8 @@ diff -u -p a/thread/synccall.c b/thread/synccall.c
  			if (cp) continue;
  
 -			r = -__syscall(SYS_tgkill, pid, tid, SIGSYNCCALL);
-+			r = -syscall_redirect(SYS_tgkill, pid, tid,
-+					      SIGSYNCCALL);
++			r = -syscall_redirect(SYS_tgkill, 3, (long)pid,
++					      (long)tid, (long)SIGSYNCCALL);
  
  			/* Target thread exit is a success condition. */
  			if (r == ESRCH) continue;
@@ -3123,9 +3314,9 @@ diff -u -p a/thread/synccall.c b/thread/synccall.c
  			}
 -			r = -__syscall(SYS_futex, &target_tid,
 -				FUTEX_LOCK_PI|FUTEX_PRIVATE, 0, &ts);
-+			r = -syscall_redirect(SYS_futex, &target_tid,
-+					      FUTEX_LOCK_PI | FUTEX_PRIVATE,
-+					      0, &ts);
++			r = -syscall_redirect(SYS_futex, 4, (long)&target_tid,
++					      (long)(FUTEX_LOCK_PI | FUTEX_PRIVATE),
++					      (long)0, (long)&ts);
  
  			/* Obtaining the lock means the thread responded. ESRCH
  			 * means the target thread exited, which is okay too. */
@@ -3137,7 +3328,7 @@ diff -u -p a/thread/thrd_yield.c b/thread/thrd_yield.c
  void thrd_yield()
  {
 -	__syscall(SYS_sched_yield);
-+	syscall_redirect(SYS_sched_yield);
++	syscall_redirect(SYS_sched_yield, 0);
  }
 diff -u -p a/thread/pthread_create.c b/thread/pthread_create.c
 --- a/thread/pthread_create.c
@@ -3148,14 +3339,14 @@ diff -u -p a/thread/pthread_create.c b/thread/pthread_create.c
  		 * detached later (== 2), we need to clear it here. */
 -		if (self->detached == 2) __syscall(SYS_set_tid_address, 0);
 +		if (self->detached == 2) syscall_redirect(SYS_set_tid_address,
-+							  0);
++							  1, (long)0);
  
  		/* Robust list will no longer be valid, and was already
  		 * processed above, so unregister it with the kernel. */
  		if (self->robust_list.off)
 -			__syscall(SYS_set_robust_list, 0, 3*sizeof(long));
-+			syscall_redirect(SYS_set_robust_list, 0,
-+					 3 * sizeof(long));
++			syscall_redirect(SYS_set_robust_list, 2, (long)0,
++					 (long)(3 * sizeof(long)));
  
  		/* Since __unmapself bypasses the normal munmap code path,
  		 * explicitly wait for vmlock holders first. */
@@ -3164,7 +3355,7 @@ diff -u -p a/thread/pthread_create.c b/thread/pthread_create.c
  	}
  
 -	for (;;) __syscall(SYS_exit, 0);
-+	for (;;) syscall_redirect(SYS_exit, 0);
++	for (;;) syscall_redirect(SYS_exit, 1, (long)0);
  }
  
  void __do_cleanup_push(struct __ptcb *cb)
@@ -3174,8 +3365,8 @@ diff -u -p a/thread/pthread_create.c b/thread/pthread_create.c
  	if (self->unblock_cancel)
 -		__syscall(SYS_rt_sigprocmask, SIG_UNBLOCK,
 -			SIGPT_SET, 0, _NSIG/8);
-+		syscall_redirect(SYS_rt_sigprocmask, SIG_UNBLOCK, SIGPT_SET,
-+				 0, _NSIG / 8);
++		syscall_redirect(SYS_rt_sigprocmask, 4, (long)SIG_UNBLOCK,
++				 (long)SIGPT_SET, (long)0, (long)(_NSIG / 8));
  	__pthread_exit(self->start(self->start_arg));
  	return 0;
  }
@@ -3184,19 +3375,20 @@ diff -u -p a/thread/pthread_create.c b/thread/pthread_create.c
  		init_file_lock(__stdout_used);
  		init_file_lock(__stderr_used);
 -		__syscall(SYS_rt_sigprocmask, SIG_UNBLOCK, SIGPT_SET, 0, _NSIG/8);
-+		syscall_redirect(SYS_rt_sigprocmask, SIG_UNBLOCK, SIGPT_SET,
-+				 0, _NSIG / 8);
++		syscall_redirect(SYS_rt_sigprocmask, 4, (long)SIG_UNBLOCK,
++				 (long)SIGPT_SET, (long)0, (long)(_NSIG / 8));
  		self->tsd = (void **)__pthread_tsd_main;
  		libc.threaded = 1;
  	}
-@@ -298,8 +301,8 @@ int __pthread_create(pthread_t *restrict
+@@ -298,8 +301,9 @@ int __pthread_create(pthread_t *restrict
  	}
  
  	if (do_sched) {
 -		ret = __syscall(SYS_sched_setscheduler, new->tid,
 -			attr._a_policy, &attr._a_prio);
-+		ret = syscall_redirect(SYS_sched_setscheduler, new->tid,
-+				       attr._a_policy, &attr._a_prio);
++		ret = syscall_redirect(SYS_sched_setscheduler, 3,
++				       (long)new->tid, (long)attr._a_policy,
++				       (long)&attr._a_prio);
  		a_store(new->startlock, ret<0 ? 2 : 3);
  		__wake(new->startlock, 1, 1);
  		if (ret < 0) return -ret;
@@ -3208,71 +3400,75 @@ diff -u -p a/thread/pthread_setschedprio.c b/thread/pthread_setschedprio.c
  	int r;
  	__lock(t->killlock);
 -	r = t->dead ? ESRCH : -__syscall(SYS_sched_setparam, t->tid, &prio);
-+	r = t->dead ? ESRCH : -syscall_redirect(SYS_sched_setparam, t->tid,
-+						&prio);
++	r = t->dead ? ESRCH : -syscall_redirect(SYS_sched_setparam, 2,
++						(long)t->tid, (long)&prio);
  	__unlock(t->killlock);
  	return r;
  }
 diff -u -p a/thread/pthread_cancel.c b/thread/pthread_cancel.c
 --- a/thread/pthread_cancel.c
 +++ b/thread/pthread_cancel.c
-@@ -30,7 +30,7 @@ long __syscall_cp_c(syscall_arg_t nr,
+@@ -30,7 +30,8 @@ long __syscall_cp_c(syscall_arg_t nr,
  
  	if ((st=(self=__pthread_self())->canceldisable)
  	    && (st==PTHREAD_CANCEL_DISABLE || nr==SYS_close))
 -		return __syscall(nr, u, v, w, x, y, z);
-+		return syscall_redirect(nr, u, v, w, x, y, z);
++		return syscall_redirect(nr, 6, (long)u, (long)v, (long)w,
++					(long)x, (long)y, (long)z);
  
  	r = __syscall_cp_asm(&self->cancel, nr, u, v, w, x, y, z);
  	if (r==-EINTR && nr!=SYS_close && self->cancel &&
-@@ -64,7 +64,7 @@ static void cancel_handler(int sig, sigi
+@@ -64,7 +65,7 @@ static void cancel_handler(int sig, sigi
  		return;
  	}
  
 -	__syscall(SYS_tkill, self->tid, SIGCANCEL);
-+	syscall_redirect(SYS_tkill, self->tid, SIGCANCEL);
++	syscall_redirect(SYS_tkill, 2, (long)self->tid, (long)SIGCANCEL);
  }
  
  void __testcancel()
 diff -u -p a/thread/pthread_mutex_trylock.c b/thread/pthread_mutex_trylock.c
 --- a/thread/pthread_mutex_trylock.c
 +++ b/thread/pthread_mutex_trylock.c
-@@ -19,7 +19,8 @@ int __pthread_mutex_trylock_owner(pthrea
+@@ -19,7 +19,9 @@ int __pthread_mutex_trylock_owner(pthrea
  	if (m->_m_type & 128) {
  		if (!self->robust_list.off) {
  			self->robust_list.off = (char*)&m->_m_lock-(char *)&m->_m_next;
 -			__syscall(SYS_set_robust_list, &self->robust_list, 3*sizeof(long));
-+			syscall_redirect(SYS_set_robust_list,
-+					 &self->robust_list, 3 * sizeof(long));
++			syscall_redirect(SYS_set_robust_list, 2,
++					 (long)&self->robust_list,
++					 (long)(3 * sizeof(long)));
  		}
  		if (m->_m_waiters) tid |= 0x80000000;
  		self->robust_list.pending = &m->_m_next;
 diff -u -p a/thread/pthread_getschedparam.c b/thread/pthread_getschedparam.c
 --- a/thread/pthread_getschedparam.c
 +++ b/thread/pthread_getschedparam.c
-@@ -7,9 +7,10 @@ int pthread_getschedparam(pthread_t t, i
+@@ -7,9 +7,11 @@ int pthread_getschedparam(pthread_t t, i
  	if (t->dead) {
  		r = ESRCH;
  	} else {
 -		r = -__syscall(SYS_sched_getparam, t->tid, param);
-+		r = -syscall_redirect(SYS_sched_getparam, t->tid, param);
++		r = -syscall_redirect(SYS_sched_getparam, 2, (long)t->tid,
++				      (long)param);
  		if (!r) {
 -			*policy = __syscall(SYS_sched_getscheduler, t->tid);
-+			*policy = syscall_redirect(SYS_sched_getscheduler,
-+						   t->tid);
++			*policy = syscall_redirect(SYS_sched_getscheduler, 1,
++						   (long)t->tid);
  		}
  	}
  	__unlock(t->killlock);
 diff -u -p a/thread/pthread_setschedparam.c b/thread/pthread_setschedparam.c
 --- a/thread/pthread_setschedparam.c
 +++ b/thread/pthread_setschedparam.c
-@@ -4,7 +4,8 @@ int pthread_setschedparam(pthread_t t, i
+@@ -4,7 +4,9 @@ int pthread_setschedparam(pthread_t t, i
  {
  	int r;
  	__lock(t->killlock);
 -	r = t->dead ? ESRCH : -__syscall(SYS_sched_setscheduler, t->tid, policy, param);
-+	r = t->dead ? ESRCH : -syscall_redirect(SYS_sched_setscheduler,
-+						t->tid, policy, param);
++	r = t->dead ? ESRCH : -syscall_redirect(SYS_sched_setscheduler, 3,
++						(long)t->tid, (long)policy,
++						(long)param);
  	__unlock(t->killlock);
  	return r;
  }
@@ -3285,8 +3481,8 @@ diff -u -p a/thread/__unmapself.c b/thread/__unmapself.c
  {
 -	__syscall(SYS_munmap, unmap_base, unmap_size);
 -	__syscall(SYS_exit);
-+	syscall_redirect(SYS_munmap, unmap_base, unmap_size);
-+	syscall_redirect(SYS_exit);
++	syscall_redirect(SYS_munmap, 2, (long)unmap_base, (long)unmap_size);
++	syscall_redirect(SYS_exit, 0);
  }
  
  void __unmapself(void *base, size_t size)
@@ -3295,7 +3491,7 @@ diff -u -p a/thread/__unmapself.c b/thread/__unmapself.c
  	while (lock || a_cas(&lock, 0, tid))
  		a_spin();
 -	__syscall(SYS_set_tid_address, &lock);
-+	syscall_redirect(SYS_set_tid_address, &lock);
++	syscall_redirect(SYS_set_tid_address, 1, (long)&lock);
  	unmap_base = base;
  	unmap_size = size;
  	CRTJMP(do_unmap, stack);
@@ -3307,56 +3503,64 @@ diff -u -p a/thread/arm/__set_thread_area.c b/thread/arm/__set_thread_area.c
  	}
  #endif
 -	return __syscall(0xf0005, p);
-+	return syscall_redirect(0xf0005, p);
++	return syscall_redirect(0xf0005, 1, (long)p);
  }
 diff -u -p a/thread/pthread_cond_timedwait.c b/thread/pthread_cond_timedwait.c
 --- a/thread/pthread_cond_timedwait.c
 +++ b/thread/pthread_cond_timedwait.c
-@@ -54,8 +54,9 @@ static inline void unlock_requeue(volati
+@@ -54,8 +54,12 @@ static inline void unlock_requeue(volati
  {
  	a_store(l, 0);
  	if (w) __wake(l, 1, 1);
 -	else __syscall(SYS_futex, l, FUTEX_REQUEUE|FUTEX_PRIVATE, 0, 1, r) != -ENOSYS
 -		|| __syscall(SYS_futex, l, FUTEX_REQUEUE, 0, 1, r);
-+	else syscall_redirect(SYS_futex, l, FUTEX_REQUEUE | FUTEX_PRIVATE, 0,
-+		              1, r) != -ENOSYS
-+		|| syscall_redirect(SYS_futex, l, FUTEX_REQUEUE, 0, 1, r);
++	else syscall_redirect(SYS_futex, 5, (long)l,
++		              (long)(FUTEX_REQUEUE | FUTEX_PRIVATE), (long)0,
++		              (long)1, (long)r) != -ENOSYS
++		|| syscall_redirect(SYS_futex, 5, (long)l,
++				    (long)FUTEX_REQUEUE, (long)0, (long)1,
++				    (long)r);
  }
  
  enum {
 diff -u -p a/thread/__wait.c b/thread/__wait.c
 --- a/thread/__wait.c
 +++ b/thread/__wait.c
-@@ -10,8 +10,8 @@ void __wait(volatile int *addr, volatile
+@@ -10,8 +10,11 @@ void __wait(volatile int *addr, volatile
  	}
  	if (waiters) a_inc(waiters);
  	while (*addr==val) {
 -		__syscall(SYS_futex, addr, FUTEX_WAIT|priv, val, 0) != -ENOSYS
 -		|| __syscall(SYS_futex, addr, FUTEX_WAIT, val, 0);
-+		syscall_redirect(SYS_futex, addr, FUTEX_WAIT | priv, val, 0) != -ENOSYS
-+		|| syscall_redirect(SYS_futex, addr, FUTEX_WAIT, val, 0);
++		syscall_redirect(SYS_futex, 4, (long)addr,
++				 (long)(FUTEX_WAIT | priv), (long)val,
++				 (long)0) != -ENOSYS
++		|| syscall_redirect(SYS_futex, 4, (long)addr,
++				    (long)FUTEX_WAIT, (long)val, (long)0);
  	}
  	if (waiters) a_dec(waiters);
  }
 diff -u -p a/thread/__futex.c b/thread/__futex.c
 --- a/thread/__futex.c
 +++ b/thread/__futex.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int __futex(volatile int *addr, int op, int val, void *ts)
  {
 -	return syscall(SYS_futex, addr, op, val, ts);
-+	return syscall_redirect(SYS_futex, addr, op, val, ts);
++	return syscall_redirect(SYS_futex, 4, (long)addr, (long)op, (long)val,
++				(long)ts);
  }
 diff -u -p a/thread/pthread_sigmask.c b/thread/pthread_sigmask.c
 --- a/thread/pthread_sigmask.c
 +++ b/thread/pthread_sigmask.c
-@@ -6,7 +6,7 @@ int pthread_sigmask(int how, const sigse
+@@ -6,7 +6,8 @@ int pthread_sigmask(int how, const sigse
  {
  	int ret;
  	if ((unsigned)how - SIG_BLOCK > 2U) return EINVAL;
 -	ret = -__syscall(SYS_rt_sigprocmask, how, set, old, _NSIG/8);
-+	ret = -syscall_redirect(SYS_rt_sigprocmask, how, set, old, _NSIG / 8);
++	ret = -syscall_redirect(SYS_rt_sigprocmask, 4, (long)how, (long)set,
++				(long)old, (long)(_NSIG / 8));
  	if (!ret && old) {
  		if (sizeof old->__bits[0] == 8) {
  			old->__bits[0] &= ~0x380000000ULL;
@@ -3368,19 +3572,20 @@ diff -u -p a/thread/__set_thread_area.c b/thread/__set_thread_area.c
  {
  #ifdef SYS_set_thread_area
 -	return __syscall(SYS_set_thread_area, p);
-+	return syscall_redirect(SYS_set_thread_area, p);
++	return syscall_redirect(SYS_set_thread_area, 1, (long)p);
  #else
  	return -ENOSYS;
  #endif
 diff -u -p a/thread/pthread_kill.c b/thread/pthread_kill.c
 --- a/thread/pthread_kill.c
 +++ b/thread/pthread_kill.c
-@@ -4,7 +4,7 @@ int pthread_kill(pthread_t t, int sig)
+@@ -4,7 +4,8 @@ int pthread_kill(pthread_t t, int sig)
  {
  	int r;
  	__lock(t->killlock);
 -	r = t->dead ? ESRCH : -__syscall(SYS_tkill, t->tid, sig);
-+	r = t->dead ? ESRCH : -syscall_redirect(SYS_tkill, t->tid, sig);
++	r = t->dead ? ESRCH : -syscall_redirect(SYS_tkill, 2, (long)t->tid,
++						(long)sig);
  	__unlock(t->killlock);
  	return r;
  }
@@ -3392,50 +3597,56 @@ diff -u -p a/thread/thrd_sleep.c b/thread/thrd_sleep.c
  int thrd_sleep(const struct timespec *req, struct timespec *rem)
  {
 -	int ret = __syscall(SYS_nanosleep, req, rem);
-+	int ret = syscall_redirect(SYS_nanosleep, req, rem);
++	int ret = syscall_redirect(SYS_nanosleep, 2, (long)req, (long)rem);
  	switch (ret) {
  	case 0:      return 0;
  	case -EINTR: return -1; /* value specified by C11 */
 diff -u -p a/thread/__timedwait.c b/thread/__timedwait.c
 --- a/thread/__timedwait.c
 +++ b/thread/__timedwait.c
-@@ -28,8 +28,9 @@ int __timedwait_cp(volatile int *addr, i
+@@ -28,8 +28,11 @@ int __timedwait_cp(volatile int *addr, i
  		top = &to;
  	}
  
 -	r = -__syscall_cp(SYS_futex, addr, FUTEX_WAIT|priv, val, top);
 -	if (r == ENOSYS) r = -__syscall_cp(SYS_futex, addr, FUTEX_WAIT, val, top);
-+	r = -syscall_redirect(SYS_futex, addr, FUTEX_WAIT | priv, val, top);
-+	if (r == ENOSYS) r = -syscall_redirect(SYS_futex, addr, FUTEX_WAIT,
-+					       val, top);
++	r = -syscall_redirect(SYS_futex, 4, (long)addr,
++			      (long)(FUTEX_WAIT | priv), (long)val, (long)top);
++	if (r == ENOSYS) r = -syscall_redirect(SYS_futex, 4, (long)addr,
++					       (long)FUTEX_WAIT, (long)val,
++					       (long)top);
  	if (r != EINTR && r != ETIMEDOUT && r != ECANCELED) r = 0;
  
  	return r;
 diff -u -p a/thread/pthread_barrier_wait.c b/thread/pthread_barrier_wait.c
 --- a/thread/pthread_barrier_wait.c
 +++ b/thread/pthread_barrier_wait.c
-@@ -84,8 +84,10 @@ int pthread_barrier_wait(pthread_barrier
+@@ -84,8 +84,13 @@ int pthread_barrier_wait(pthread_barrier
  			a_spin();
  		a_inc(&inst->finished);
  		while (inst->finished == 1)
 -			__syscall(SYS_futex,&inst->finished,FUTEX_WAIT|FUTEX_PRIVATE,1,0) != -ENOSYS
 -			|| __syscall(SYS_futex,&inst->finished,FUTEX_WAIT,1,0);
-+			syscall_redirect(SYS_futex, &inst->finished,
-+					 FUTEX_WAIT | FUTEX_PRIVATE, 1, 0) != -ENOSYS
-+			|| syscall_redirect(SYS_futex, &inst->finished,
-+					    FUTEX_WAIT, 1, 0);
++			syscall_redirect(SYS_futex, 4, (long)&inst->finished,
++					 (long)(FUTEX_WAIT | FUTEX_PRIVATE),
++					 (long)1, (long)0) != -ENOSYS
++			|| syscall_redirect(SYS_futex, 4,
++					    (long)&inst->finished,
++					    (long)FUTEX_WAIT, (long)1,
++					    (long)0);
  		return PTHREAD_BARRIER_SERIAL_THREAD;
  	}
  
 diff -u -p a/misc/getrlimit.c b/misc/getrlimit.c
 --- a/misc/getrlimit.c
 +++ b/misc/getrlimit.c
-@@ -8,14 +8,14 @@
+@@ -8,14 +8,15 @@
  int getrlimit(int resource, struct rlimit *rlim)
  {
  	unsigned long k_rlim[2];
 -	int ret = syscall(SYS_prlimit64, 0, resource, 0, rlim);
-+	int ret = syscall_redirect(SYS_prlimit64, 0, resource, 0, rlim);
++	int ret = syscall_redirect(SYS_prlimit64, 4, (long)0, (long)resource,
++				   (long)0, (long)rlim);
  	if (!ret) {
  		FIX(rlim->rlim_cur);
  		FIX(rlim->rlim_max);
@@ -3443,19 +3654,20 @@ diff -u -p a/misc/getrlimit.c b/misc/getrlimit.c
  	if (!ret || errno != ENOSYS)
  		return ret;
 -	if (syscall(SYS_getrlimit, resource, k_rlim) < 0)
-+	if (syscall_redirect(SYS_getrlimit, resource, k_rlim) < 0)
++	if (syscall_redirect(SYS_getrlimit, 2, (long)resource, (long)k_rlim) < 0)
  		return -1;
  	rlim->rlim_cur = k_rlim[0] == -1UL ? RLIM_INFINITY : k_rlim[0];
  	rlim->rlim_max = k_rlim[1] == -1UL ? RLIM_INFINITY : k_rlim[1];
 diff -u -p a/misc/getresgid.c b/misc/getresgid.c
 --- a/misc/getresgid.c
 +++ b/misc/getresgid.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  int getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid)
  {
 -	return syscall(SYS_getresgid, rgid, egid, sgid);
-+	return syscall_redirect(SYS_getresgid, rgid, egid, sgid);
++	return syscall_redirect(SYS_getresgid, 3, (long)rgid, (long)egid,
++				(long)sgid);
  }
 diff -u -p a/misc/ioctl.c b/misc/ioctl.c
 --- a/misc/ioctl.c
@@ -3465,22 +3677,24 @@ diff -u -p a/misc/ioctl.c b/misc/ioctl.c
  	arg = va_arg(ap, void *);
  	va_end(ap);
 -	return syscall(SYS_ioctl, fd, req, arg);
-+	return syscall_redirect(SYS_ioctl, fd, req, arg);
++	return syscall_redirect(SYS_ioctl, 3, (long)fd, (long)req, (long)arg);
  }
 diff -u -p a/misc/setrlimit.c b/misc/setrlimit.c
 --- a/misc/setrlimit.c
 +++ b/misc/setrlimit.c
-@@ -16,11 +16,11 @@ int __setrlimit(int resource, const stru
+@@ -16,11 +16,13 @@ int __setrlimit(int resource, const stru
  		FIX(tmp.rlim_max);
  		rlim = &tmp;
  	}
 -	int ret = __syscall(SYS_prlimit64, 0, resource, rlim, 0);
-+	int ret = syscall_redirect(SYS_prlimit64, 0, resource, rlim, 0);
++	int ret = syscall_redirect(SYS_prlimit64, 4, (long)0, (long)resource,
++				   (long)rlim, (long)0);
  	if (ret != -ENOSYS) return ret;
  	k_rlim[0] = MIN(rlim->rlim_cur, MIN(-1UL, SYSCALL_RLIM_INFINITY));
  	k_rlim[1] = MIN(rlim->rlim_max, MIN(-1UL, SYSCALL_RLIM_INFINITY));
 -	return __syscall(SYS_setrlimit, resource, k_rlim);
-+	return syscall_redirect(SYS_setrlimit, resource, k_rlim);
++	return syscall_redirect(SYS_setrlimit, 2, (long)resource,
++				(long)k_rlim);
  }
  
  struct ctx {
@@ -3492,11 +3706,11 @@ diff -u -p a/misc/realpath.c b/misc/realpath.c
  	}
  
 -	__syscall(SYS_close, fd);
-+	syscall_redirect(SYS_close, fd);
++	syscall_redirect(SYS_close, 1, (long)fd);
  	return resolved ? strcpy(resolved, tmp) : strdup(tmp);
  err:
 -	__syscall(SYS_close, fd);
-+	syscall_redirect(SYS_close, fd);
++	syscall_redirect(SYS_close, 1, (long)fd);
  	return 0;
  }
 diff -u -p a/misc/syscall.c b/misc/syscall.c
@@ -3507,7 +3721,7 @@ diff -u -p a/misc/syscall.c b/misc/syscall.c
  	f=va_arg(ap, syscall_arg_t);
  	va_end(ap);
 -	return __syscall_ret(__syscall(n,a,b,c,d,e,f));
-+	return __syscall_ret(syscall_redirect(n, a, b, c, d, e, f));
++	return __syscall_ret(syscall_redirect(n, 6, (long)a, (long)b, (long)c, (long)d, (long)e, (long)f));
  }
 diff -u -p a/misc/getrusage.c b/misc/getrusage.c
 --- a/misc/getrusage.c
@@ -3517,7 +3731,7 @@ diff -u -p a/misc/getrusage.c b/misc/getrusage.c
  int getrusage(int who, struct rusage *ru)
  {
 -	return syscall(SYS_getrusage, who, ru);
-+	return syscall_redirect(SYS_getrusage, who, ru);
++	return syscall_redirect(SYS_getrusage, 2, (long)who, (long)ru);
  }
 diff -u -p a/misc/getpriority.c b/misc/getpriority.c
 --- a/misc/getpriority.c
@@ -3527,19 +3741,20 @@ diff -u -p a/misc/getpriority.c b/misc/getpriority.c
  int getpriority(int which, id_t who)
  {
 -	int ret = syscall(SYS_getpriority, which, who);
-+	int ret = syscall_redirect(SYS_getpriority, which, who);
++	int ret = syscall_redirect(SYS_getpriority, 2, (long)which, (long)who);
  	if (ret < 0) return ret;
  	return 20-ret;
  }
 diff -u -p a/misc/setpriority.c b/misc/setpriority.c
 --- a/misc/setpriority.c
 +++ b/misc/setpriority.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int setpriority(int which, id_t who, int prio)
  {
 -	return syscall(SYS_setpriority, which, who, prio);
-+	return syscall_redirect(SYS_setpriority, which, who, prio);
++	return syscall_redirect(SYS_setpriority, 3, (long)which, (long)who,
++				(long)prio);
  }
 diff -u -p a/misc/setdomainname.c b/misc/setdomainname.c
 --- a/misc/setdomainname.c
@@ -3549,7 +3764,7 @@ diff -u -p a/misc/setdomainname.c b/misc/setdomainname.c
  int setdomainname(const char *name, size_t len)
  {
 -	return syscall(SYS_setdomainname, name, len);
-+	return syscall_redirect(SYS_setdomainname, name, len);
++	return syscall_redirect(SYS_setdomainname, 2, (long)name, (long)len);
  }
 diff -u -p a/misc/pty.c b/misc/pty.c
 --- a/misc/pty.c
@@ -3559,19 +3774,20 @@ diff -u -p a/misc/pty.c b/misc/pty.c
  	int pty, err;
  	if (!buf) len = 0;
 -	if ((err = __syscall(SYS_ioctl, fd, TIOCGPTN, &pty))) return -err;
-+	if ((err = syscall_redirect(SYS_ioctl, fd, TIOCGPTN, &pty))) return -err;
++	if ((err = syscall_redirect(SYS_ioctl, 3, (long)fd, (long)TIOCGPTN, (long)&pty))) return -err;
  	if (snprintf(buf, len, "/dev/pts/%d", pty) >= len) return ERANGE;
  	return 0;
  }
 diff -u -p a/misc/getresuid.c b/misc/getresuid.c
 --- a/misc/getresuid.c
 +++ b/misc/getresuid.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  int getresuid(uid_t *ruid, uid_t *euid, uid_t *suid)
  {
 -	return syscall(SYS_getresuid, ruid, euid, suid);
-+	return syscall_redirect(SYS_getresuid, ruid, euid, suid);
++	return syscall_redirect(SYS_getresuid, 3, (long)ruid, (long)euid,
++				(long)suid);
  }
 diff -u -p a/misc/uname.c b/misc/uname.c
 --- a/misc/uname.c
@@ -3581,7 +3797,7 @@ diff -u -p a/misc/uname.c b/misc/uname.c
  int uname(struct utsname *uts)
  {
 -	return syscall(SYS_uname, uts);
-+	return syscall_redirect(SYS_uname, uts);
++	return syscall_redirect(SYS_uname, 1, (long)uts);
  }
 diff -u -p a/time/nanosleep.c b/time/nanosleep.c
 --- a/time/nanosleep.c
@@ -3591,7 +3807,7 @@ diff -u -p a/time/nanosleep.c b/time/nanosleep.c
  int nanosleep(const struct timespec *req, struct timespec *rem)
  {
 -	return syscall_cp(SYS_nanosleep, req, rem);
-+	return syscall_redirect(SYS_nanosleep, req, rem);
++	return syscall_redirect(SYS_nanosleep, 2, (long)req, (long)rem);
  }
 diff -u -p a/time/timer_gettime.c b/time/timer_gettime.c
 --- a/time/timer_gettime.c
@@ -3601,7 +3817,7 @@ diff -u -p a/time/timer_gettime.c b/time/timer_gettime.c
  		t = (void *)(uintptr_t)(td->timer_id & INT_MAX);
  	}
 -	return syscall(SYS_timer_gettime, t, val);
-+	return syscall_redirect(SYS_timer_gettime, t, val);
++	return syscall_redirect(SYS_timer_gettime, 2, (long)t, (long)val);
  }
 diff -u -p a/time/clock_getcpuclockid.c b/time/clock_getcpuclockid.c
 --- a/time/clock_getcpuclockid.c
@@ -3611,7 +3827,7 @@ diff -u -p a/time/clock_getcpuclockid.c b/time/clock_getcpuclockid.c
  	struct timespec ts;
  	clockid_t id = (-pid-1)*8U + 2;
 -	int ret = __syscall(SYS_clock_getres, id, &ts);
-+	int ret = syscall_redirect(SYS_clock_getres, id, &ts);
++	int ret = syscall_redirect(SYS_clock_getres, 2, (long)id, (long)&ts);
  	if (ret) return -ret;
  	*clk = id;
  	return 0;
@@ -3623,7 +3839,7 @@ diff -u -p a/time/clock_settime.c b/time/clock_settime.c
  int clock_settime(clockid_t clk, const struct timespec *ts)
  {
 -	return syscall(SYS_clock_settime, clk, ts);
-+	return syscall_redirect(SYS_clock_settime, clk, ts);
++	return syscall_redirect(SYS_clock_settime, 2, (long)clk, (long)ts);
  }
 diff -u -p a/time/times.c b/time/times.c
 --- a/time/times.c
@@ -3633,51 +3849,53 @@ diff -u -p a/time/times.c b/time/times.c
  clock_t times(struct tms *tms)
  {
 -	return __syscall(SYS_times, tms);
-+	return syscall_redirect(SYS_times, tms);
++	return syscall_redirect(SYS_times, 1, (long)tms);
  }
 diff -u -p a/time/clock_nanosleep.c b/time/clock_nanosleep.c
 --- a/time/clock_nanosleep.c
 +++ b/time/clock_nanosleep.c
-@@ -5,6 +5,6 @@
+@@ -5,6 +5,7 @@
  
  int clock_nanosleep(clockid_t clk, int flags, const struct timespec *req, struct timespec *rem)
  {
 -	int r = -__syscall_cp(SYS_clock_nanosleep, clk, flags, req, rem);
-+	int r = -syscall_redirect(SYS_clock_nanosleep, clk, flags, req, rem);
++	int r = -syscall_redirect(SYS_clock_nanosleep, 4, (long)clk,
++				  (long)flags, (long)req, (long)rem);
  	return clk == CLOCK_THREAD_CPUTIME_ID ? EINVAL : r;
  }
 diff -u -p a/time/timer_create.c b/time/timer_create.c
 --- a/time/timer_create.c
 +++ b/time/timer_create.c
-@@ -70,10 +70,10 @@ static void *start(void *arg)
+@@ -70,10 +70,11 @@ static void *start(void *arg)
  
  	pthread_barrier_wait(&args->b);
  	if ((id = self->timer_id) >= 0) {
 -		__syscall(SYS_rt_sigprocmask, SIG_UNBLOCK,
 -			SIGTIMER_SET, 0, _NSIG/8);
-+		syscall_redirect(SYS_rt_sigprocmask, SIG_UNBLOCK,
-+				 SIGTIMER_SET, 0, _NSIG / 8);
++		syscall_redirect(SYS_rt_sigprocmask, 4, (long)SIG_UNBLOCK,
++				 (long)SIGTIMER_SET, (long)0,
++				 (long)(_NSIG / 8));
  		__wait(&self->timer_id, 0, id, 1);
 -		__syscall(SYS_timer_delete, id);
-+		syscall_redirect(SYS_timer_delete, id);
++		syscall_redirect(SYS_timer_delete, 1, (long)id);
  	}
  	return 0;
  }
-@@ -99,7 +99,7 @@ int timer_create(clockid_t clk, struct s
+@@ -99,7 +100,7 @@ int timer_create(clockid_t clk, struct s
  			ksev.sigev_tid = 0;
  			ksevp = &ksev;
  		}
 -		if (syscall(SYS_timer_create, clk, ksevp, &timerid) < 0)
-+		if (syscall_redirect(SYS_timer_create, clk, ksevp, &timerid) < 0)
++		if (syscall_redirect(SYS_timer_create, 3, (long)clk, (long)ksevp, (long)&timerid) < 0)
  			return -1;
  		*res = (void *)(intptr_t)timerid;
  		break;
-@@ -125,7 +125,7 @@ int timer_create(clockid_t clk, struct s
+@@ -125,7 +126,7 @@ int timer_create(clockid_t clk, struct s
  		ksev.sigev_signo = SIGTIMER;
  		ksev.sigev_notify = 4; /* SIGEV_THREAD_ID */
  		ksev.sigev_tid = td->tid;
 -		if (syscall(SYS_timer_create, clk, &ksev, &timerid) < 0)
-+		if (syscall_redirect(SYS_timer_create, clk, &ksev, &timerid) < 0)
++		if (syscall_redirect(SYS_timer_create, 3, (long)clk, (long)&ksev, (long)&timerid) < 0)
  			timerid = -1;
  		td->timer_id = timerid;
  		pthread_barrier_wait(&args.b);
@@ -3689,31 +3907,33 @@ diff -u -p a/time/timer_getoverrun.c b/time/timer_getoverrun.c
  		t = (void *)(uintptr_t)(td->timer_id & INT_MAX);
  	}
 -	return syscall(SYS_timer_getoverrun, t);
-+	return syscall_redirect(SYS_timer_getoverrun, t);
++	return syscall_redirect(SYS_timer_getoverrun, 1, (long)t);
  }
 diff -u -p a/time/timer_settime.c b/time/timer_settime.c
 --- a/time/timer_settime.c
 +++ b/time/timer_settime.c
-@@ -8,5 +8,5 @@ int timer_settime(timer_t t, int flags,
+@@ -8,5 +8,6 @@ int timer_settime(timer_t t, int flags,
  		pthread_t td = (void *)((uintptr_t)t << 1);
  		t = (void *)(uintptr_t)(td->timer_id & INT_MAX);
  	}
 -	return syscall(SYS_timer_settime, t, flags, val, old);
-+	return syscall_redirect(SYS_timer_settime, t, flags, val, old);
++	return syscall_redirect(SYS_timer_settime, 4, (long)t, (long)flags,
++				(long)val, (long)old);
  }
 diff -u -p a/time/clock_gettime.c b/time/clock_gettime.c
 --- a/time/clock_gettime.c
 +++ b/time/clock_gettime.c
-@@ -43,10 +43,10 @@ int __clock_gettime(clockid_t clk, struc
+@@ -43,10 +43,11 @@ int __clock_gettime(clockid_t clk, struc
  	}
  #endif
  
 -	r = __syscall(SYS_clock_gettime, clk, ts);
-+	r = syscall_redirect(SYS_clock_gettime, clk, ts);
++	r = syscall_redirect(SYS_clock_gettime, 2, (long)clk, (long)ts);
  	if (r == -ENOSYS) {
  		if (clk == CLOCK_REALTIME) {
 -			__syscall(SYS_gettimeofday, ts, 0);
-+			syscall_redirect(SYS_gettimeofday, ts, 0);
++			syscall_redirect(SYS_gettimeofday, 2, (long)ts,
++					 (long)0);
  			ts->tv_nsec = (int)ts->tv_nsec * 1000;
  			return 0;
  		}
@@ -3725,12 +3945,12 @@ diff -u -p a/time/__map_file.c b/time/__map_file.c
  	int fd = __sys_open(pathname, O_RDONLY|O_CLOEXEC|O_NONBLOCK);
  	if (fd < 0) return 0;
 -	if (!__syscall(SYS_fstat, fd, &st)) {
-+	if (!syscall_redirect(SYS_fstat, fd, &st)) {
++	if (!syscall_redirect(SYS_fstat, 2, (long)fd, (long)&st)) {
  		map = __mmap(0, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
  		*size = st.st_size;
  	}
 -	__syscall(SYS_close, fd);
-+	syscall_redirect(SYS_close, fd);
++	syscall_redirect(SYS_close, 1, (long)fd);
  	return map == MAP_FAILED ? 0 : map;
  }
 diff -u -p a/time/clock_getres.c b/time/clock_getres.c
@@ -3741,7 +3961,7 @@ diff -u -p a/time/clock_getres.c b/time/clock_getres.c
  int clock_getres(clockid_t clk, struct timespec *ts)
  {
 -	return syscall(SYS_clock_getres, clk, ts);
-+	return syscall_redirect(SYS_clock_getres, clk, ts);
++	return syscall_redirect(SYS_clock_getres, 2, (long)clk, (long)ts);
  }
 diff -u -p a/time/timer_delete.c b/time/timer_delete.c
 --- a/time/timer_delete.c
@@ -3751,7 +3971,7 @@ diff -u -p a/time/timer_delete.c b/time/timer_delete.c
  		return 0;
  	}
 -	return __syscall(SYS_timer_delete, t);
-+	return syscall_redirect(SYS_timer_delete, t);
++	return syscall_redirect(SYS_timer_delete, 1, (long)t);
  }
 diff -u -p a/mman/munmap.c b/mman/munmap.c
 --- a/mman/munmap.c
@@ -3761,19 +3981,20 @@ diff -u -p a/mman/munmap.c b/mman/munmap.c
  {
  	__vm_wait();
 -	return syscall(SYS_munmap, start, len);
-+	return syscall_redirect(SYS_munmap, start, len);
++	return syscall_redirect(SYS_munmap, 2, (long)start, (long)len);
  }
  
  weak_alias(__munmap, munmap);
 diff -u -p a/mman/madvise.c b/mman/madvise.c
 --- a/mman/madvise.c
 +++ b/mman/madvise.c
-@@ -4,7 +4,7 @@
+@@ -4,7 +4,8 @@
  
  int __madvise(void *addr, size_t len, int advice)
  {
 -	return syscall(SYS_madvise, addr, len, advice);
-+	return syscall_redirect(SYS_madvise, addr, len, advice);
++	return syscall_redirect(SYS_madvise, 3, (long)addr, (long)len,
++				(long)advice);
  }
  
  weak_alias(__madvise, madvise);
@@ -3785,7 +4006,7 @@ diff -u -p a/mman/mlock.c b/mman/mlock.c
  int mlock(const void *addr, size_t len)
  {
 -	return syscall(SYS_mlock, addr, len);
-+	return syscall_redirect(SYS_mlock, addr, len);
++	return syscall_redirect(SYS_mlock, 2, (long)addr, (long)len);
  }
 diff -u -p a/mman/munlock.c b/mman/munlock.c
 --- a/mman/munlock.c
@@ -3795,7 +4016,7 @@ diff -u -p a/mman/munlock.c b/mman/munlock.c
  int munlock(const void *addr, size_t len)
  {
 -	return syscall(SYS_munlock, addr, len);
-+	return syscall_redirect(SYS_munlock, addr, len);
++	return syscall_redirect(SYS_munlock, 2, (long)addr, (long)len);
  }
 diff -u -p a/mman/munlockall.c b/mman/munlockall.c
 --- a/mman/munlockall.c
@@ -3805,18 +4026,19 @@ diff -u -p a/mman/munlockall.c b/mman/munlockall.c
  int munlockall(void)
  {
 -	return syscall(SYS_munlockall);
-+	return syscall_redirect(SYS_munlockall);
++	return syscall_redirect(SYS_munlockall, 0);
  }
 diff -u -p a/mman/mremap.c b/mman/mremap.c
 --- a/mman/mremap.c
 +++ b/mman/mremap.c
-@@ -27,7 +27,8 @@ void *__mremap(void *old_addr, size_t ol
+@@ -27,7 +27,9 @@ void *__mremap(void *old_addr, size_t ol
  		va_end(ap);
  	}
  
 -	return (void *)syscall(SYS_mremap, old_addr, old_len, new_len, flags, new_addr);
-+	return (void *)syscall_redirect(SYS_mremap, old_addr, old_len,
-+					new_len, flags, new_addr);
++	return (void *)syscall_redirect(SYS_mremap, 5, (long)old_addr,
++					(long)old_len, (long)new_len,
++					(long)flags, (long)new_addr);
  }
  
  weak_alias(__mremap, mremap);
@@ -3828,63 +4050,69 @@ diff -u -p a/mman/mlockall.c b/mman/mlockall.c
  int mlockall(int flags)
  {
 -	return syscall(SYS_mlockall, flags);
-+	return syscall_redirect(SYS_mlockall, flags);
++	return syscall_redirect(SYS_mlockall, 1, (long)flags);
  }
 diff -u -p a/mman/msync.c b/mman/msync.c
 --- a/mman/msync.c
 +++ b/mman/msync.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int msync(void *start, size_t len, int flags)
  {
 -	return syscall_cp(SYS_msync, start, len, flags);
-+	return syscall_redirect(SYS_msync, start, len, flags);
++	return syscall_redirect(SYS_msync, 3, (long)start, (long)len,
++				(long)flags);
  }
 diff -u -p a/mman/mincore.c b/mman/mincore.c
 --- a/mman/mincore.c
 +++ b/mman/mincore.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  int mincore (void *addr, size_t len, unsigned char *vec)
  {
 -	return syscall(SYS_mincore, addr, len, vec);
-+	return syscall_redirect(SYS_mincore, addr, len, vec);
++	return syscall_redirect(SYS_mincore, 3, (long)addr, (long)len,
++				(long)vec);
  }
 diff -u -p a/mman/mmap.c b/mman/mmap.c
 --- a/mman/mmap.c
 +++ b/mman/mmap.c
-@@ -27,9 +27,10 @@ void *__mmap(void *start, size_t len, in
+@@ -27,9 +27,12 @@ void *__mmap(void *start, size_t len, in
  		__vm_wait();
  	}
  #ifdef SYS_mmap2
 -	ret = __syscall(SYS_mmap2, start, len, prot, flags, fd, off/UNIT);
-+	ret = syscall_redirect(SYS_mmap2, start, len, prot, flags, fd,
-+			       off / UNIT);
++	ret = syscall_redirect(SYS_mmap2, 6, (long)start, (long)len,
++			       (long)prot, (long)flags, (long)fd,
++			       (long)(off / UNIT));
  #else
 -	ret = __syscall(SYS_mmap, start, len, prot, flags, fd, off);
-+	ret = syscall_redirect(SYS_mmap, start, len, prot, flags, fd, off);
++	ret = syscall_redirect(SYS_mmap, 6, (long)start, (long)len,
++			       (long)prot, (long)flags, (long)fd, (long)off);
  #endif
  	/* Fixup incorrect EPERM from kernel. */
  	if (ret == -EPERM && !start && (flags&MAP_ANON) && !(flags&MAP_FIXED))
 diff -u -p a/mman/posix_madvise.c b/mman/posix_madvise.c
 --- a/mman/posix_madvise.c
 +++ b/mman/posix_madvise.c
-@@ -5,5 +5,5 @@
+@@ -5,5 +5,6 @@
  int posix_madvise(void *addr, size_t len, int advice)
  {
  	if (advice == MADV_DONTNEED) return 0;
 -	return -__syscall(SYS_madvise, addr, len, advice);
-+	return -syscall_redirect(SYS_madvise, addr, len, advice);
++	return -syscall_redirect(SYS_madvise, 3, (long)addr, (long)len,
++				 (long)advice);
  }
 diff -u -p a/mman/mprotect.c b/mman/mprotect.c
 --- a/mman/mprotect.c
 +++ b/mman/mprotect.c
-@@ -7,7 +7,7 @@ int __mprotect(void *addr, size_t len, i
+@@ -7,7 +7,8 @@ int __mprotect(void *addr, size_t len, i
  	size_t start, end;
  	start = (size_t)addr & -PAGE_SIZE;
  	end = (size_t)((char *)addr + len + PAGE_SIZE-1) & -PAGE_SIZE;
 -	return syscall(SYS_mprotect, start, end-start, prot);
-+	return syscall_redirect(SYS_mprotect, start, end - start, prot);
++	return syscall_redirect(SYS_mprotect, 3, (long)start,
++				(long)(end - start), (long)prot);
  }
  
  weak_alias(__mprotect, mprotect);
@@ -3896,39 +4124,42 @@ diff -u -p a/mq/mq_unlink.c b/mq/mq_unlink.c
  	int ret;
  	if (*name == '/') name++;
 -	ret = __syscall(SYS_mq_unlink, name);
-+	ret = syscall_redirect(SYS_mq_unlink, name);
++	ret = syscall_redirect(SYS_mq_unlink, 1, (long)name);
  	if (ret < 0) {
  		if (ret == -EPERM) ret = -EACCES;
  		errno = -ret;
 diff -u -p a/mq/mq_open.c b/mq/mq_open.c
 --- a/mq/mq_open.c
 +++ b/mq/mq_open.c
-@@ -15,5 +15,5 @@ mqd_t mq_open(const char *name, int flag
+@@ -15,5 +15,6 @@ mqd_t mq_open(const char *name, int flag
  		attr = va_arg(ap, struct mq_attr *);
  		va_end(ap);
  	}
 -	return syscall(SYS_mq_open, name, flags, mode, attr);
-+	return syscall_redirect(SYS_mq_open, name, flags, mode, attr);
++	return syscall_redirect(SYS_mq_open, 4, (long)name, (long)flags,
++				(long)mode, (long)attr);
  }
 diff -u -p a/mq/mq_timedreceive.c b/mq/mq_timedreceive.c
 --- a/mq/mq_timedreceive.c
 +++ b/mq/mq_timedreceive.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  ssize_t mq_timedreceive(mqd_t mqd, char *restrict msg, size_t len, unsigned *restrict prio, const struct timespec *restrict at)
  {
 -	return syscall_cp(SYS_mq_timedreceive, mqd, msg, len, prio, at);
-+	return syscall_redirect(SYS_mq_timedreceive, mqd, msg, len, prio, at);
++	return syscall_redirect(SYS_mq_timedreceive, 5, (long)mqd, (long)msg,
++				(long)len, (long)prio, (long)at);
  }
 diff -u -p a/mq/mq_setattr.c b/mq/mq_setattr.c
 --- a/mq/mq_setattr.c
 +++ b/mq/mq_setattr.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int mq_setattr(mqd_t mqd, const struct mq_attr *restrict new, struct mq_attr *restrict old)
  {
 -	return syscall(SYS_mq_getsetattr, mqd, new, old);
-+	return syscall_redirect(SYS_mq_getsetattr, mqd, new, old);
++	return syscall_redirect(SYS_mq_getsetattr, 3, (long)mqd, (long)new,
++				(long)old);
  }
 diff -u -p a/mq/mq_close.c b/mq/mq_close.c
 --- a/mq/mq_close.c
@@ -3938,70 +4169,74 @@ diff -u -p a/mq/mq_close.c b/mq/mq_close.c
  int mq_close(mqd_t mqd)
  {
 -	return syscall(SYS_close, mqd);
-+	return syscall_redirect(SYS_close, mqd);
++	return syscall_redirect(SYS_close, 1, (long)mqd);
  }
 diff -u -p a/mq/mq_notify.c b/mq/mq_notify.c
 --- a/mq/mq_notify.c
 +++ b/mq/mq_notify.c
-@@ -39,7 +39,7 @@ int mq_notify(mqd_t mqd, const struct si
+@@ -39,7 +39,8 @@ int mq_notify(mqd_t mqd, const struct si
  	static const char zeros[32];
  
  	if (!sev || sev->sigev_notify != SIGEV_THREAD)
 -		return syscall(SYS_mq_notify, mqd, sev);
-+		return syscall_redirect(SYS_mq_notify, mqd, sev);
++		return syscall_redirect(SYS_mq_notify, 2, (long)mqd,
++					(long)sev);
  
  	s = socket(AF_NETLINK, SOCK_RAW|SOCK_CLOEXEC, 0);
  	if (s < 0) return -1;
-@@ -51,7 +51,7 @@ int mq_notify(mqd_t mqd, const struct si
+@@ -51,7 +52,7 @@ int mq_notify(mqd_t mqd, const struct si
  	pthread_barrier_init(&args.barrier, 0, 2);
  
  	if (pthread_create(&td, &attr, start, &args)) {
 -		__syscall(SYS_close, s);
-+		syscall_redirect(SYS_close, s);
++		syscall_redirect(SYS_close, 1, (long)s);
  		errno = EAGAIN;
  		return -1;
  	}
-@@ -63,9 +63,9 @@ int mq_notify(mqd_t mqd, const struct si
+@@ -63,9 +64,9 @@ int mq_notify(mqd_t mqd, const struct si
  	sev2.sigev_signo = s;
  	sev2.sigev_value.sival_ptr = (void *)&zeros;
  
 -	if (syscall(SYS_mq_notify, mqd, &sev2) < 0) {
-+	if (syscall_redirect(SYS_mq_notify, mqd, &sev2) < 0) {
++	if (syscall_redirect(SYS_mq_notify, 2, (long)mqd, (long)&sev2) < 0) {
  		pthread_cancel(td);
 -		__syscall(SYS_close, s);
-+		syscall_redirect(SYS_close, s);
++		syscall_redirect(SYS_close, 1, (long)s);
  		return -1;
  	}
  
 diff -u -p a/mq/mq_timedsend.c b/mq/mq_timedsend.c
 --- a/mq/mq_timedsend.c
 +++ b/mq/mq_timedsend.c
-@@ -3,5 +3,5 @@
+@@ -3,5 +3,6 @@
  
  int mq_timedsend(mqd_t mqd, const char *msg, size_t len, unsigned prio, const struct timespec *at)
  {
 -	return syscall_cp(SYS_mq_timedsend, mqd, msg, len, prio, at);
-+	return syscall_redirect(SYS_mq_timedsend, mqd, msg, len, prio, at);
++	return syscall_redirect(SYS_mq_timedsend, 5, (long)mqd, (long)msg,
++				(long)len, (long)prio, (long)at);
  }
 diff -u -p a/process/execve.c b/process/execve.c
 --- a/process/execve.c
 +++ b/process/execve.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  int execve(const char *path, char *const argv[], char *const envp[])
  {
  	/* do we need to use environ if envp is null? */
 -	return syscall(SYS_execve, path, argv, envp);
-+	return syscall_redirect(SYS_execve, path, argv, envp);
++	return syscall_redirect(SYS_execve, 3, (long)path, (long)argv,
++				(long)envp);
  }
 diff -u -p a/process/waitpid.c b/process/waitpid.c
 --- a/process/waitpid.c
 +++ b/process/waitpid.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  pid_t waitpid(pid_t pid, int *status, int options)
  {
 -	return syscall_cp(SYS_wait4, pid, status, options, 0);
-+	return syscall_redirect(SYS_wait4, pid, status, options, 0);
++	return syscall_redirect(SYS_wait4, 4, (long)pid, (long)status,
++				(long)options, (long)0);
  }
 diff -u -p a/process/vfork.c b/process/vfork.c
 --- a/process/vfork.c
@@ -4011,22 +4246,23 @@ diff -u -p a/process/vfork.c b/process/vfork.c
  	/* vfork syscall cannot be made from C code */
  #ifdef SYS_fork
 -	return syscall(SYS_fork);
-+	return syscall_redirect(SYS_fork);
++	return syscall_redirect(SYS_fork, 0);
  #else
 -	return syscall(SYS_clone, SIGCHLD, 0);
-+	return syscall_redirect(SYS_clone, SIGCHLD, 0);
++	return syscall_redirect(SYS_clone, 2, (long)SIGCHLD, (long)0);
  #endif
  }
  
 diff -u -p a/process/waitid.c b/process/waitid.c
 --- a/process/waitid.c
 +++ b/process/waitid.c
-@@ -4,5 +4,5 @@
+@@ -4,5 +4,6 @@
  
  int waitid(idtype_t type, id_t id, siginfo_t *info, int options)
  {
 -	return syscall_cp(SYS_waitid, type, id, info, options, 0);
-+	return syscall_redirect(SYS_waitid, type, id, info, options, 0);
++	return syscall_redirect(SYS_waitid, 5, (long)type, (long)id,
++				(long)info, (long)options, (long)0);
  }
 diff -u -p a/process/posix_spawn.c b/process/posix_spawn.c
 --- a/process/posix_spawn.c
@@ -4036,10 +4272,10 @@ diff -u -p a/process/posix_spawn.c b/process/posix_spawn.c
  {
  #ifdef SYS_dup2
 -	return __syscall(SYS_dup2, old, new);
-+	return syscall_redirect(SYS_dup2, old, new);
++	return syscall_redirect(SYS_dup2, 2, (long)old, (long)new);
  #else
 -	return __syscall(SYS_dup3, old, new, 0);
-+	return syscall_redirect(SYS_dup3, old, new, 0);
++	return syscall_redirect(SYS_dup3, 3, (long)old, (long)new, (long)0);
  #endif
  }
  
@@ -4048,12 +4284,12 @@ diff -u -p a/process/posix_spawn.c b/process/posix_spawn.c
  
  	if (attr->__flags & POSIX_SPAWN_SETSID)
 -		if ((ret=__syscall(SYS_setsid)) < 0)
-+		if ((ret=syscall_redirect(SYS_setsid)) < 0)
++		if ((ret=syscall_redirect(SYS_setsid, 0)) < 0)
  			goto fail;
  
  	if (attr->__flags & POSIX_SPAWN_SETPGROUP)
 -		if ((ret=__syscall(SYS_setpgid, 0, attr->__pgrp)))
-+		if ((ret=syscall_redirect(SYS_setpgid, 0, attr->__pgrp)))
++		if ((ret=syscall_redirect(SYS_setpgid, 2, (long)0, (long)attr->__pgrp)))
  			goto fail;
  
  	/* Use syscalls directly because the library functions attempt
@@ -4062,8 +4298,8 @@ diff -u -p a/process/posix_spawn.c b/process/posix_spawn.c
  	if (attr->__flags & POSIX_SPAWN_RESETIDS)
 -		if ((ret=__syscall(SYS_setgid, __syscall(SYS_getgid))) ||
 -		    (ret=__syscall(SYS_setuid, __syscall(SYS_getuid))) )
-+		if ((ret=__syscall(SYS_setgid, syscall_redirect(SYS_getgid))) ||
-+		    (ret=__syscall(SYS_setuid, syscall_redirect(SYS_getuid))) )
++		if ((ret=__syscall(SYS_setgid, syscall_redirect(SYS_getgid, 0))) ||
++		    (ret=__syscall(SYS_setuid, syscall_redirect(SYS_getuid, 0))) )
  			goto fail;
  
  	if (fa && fa->__actions) {
@@ -4072,63 +4308,69 @@ diff -u -p a/process/posix_spawn.c b/process/posix_spawn.c
  			 * an unoccupied fd. */
  			if (op->fd == p) {
 -				ret = __syscall(SYS_dup, p);
-+				ret = syscall_redirect(SYS_dup, p);
++				ret = syscall_redirect(SYS_dup, 1, (long)p);
  				if (ret < 0) goto fail;
 -				__syscall(SYS_close, p);
-+				syscall_redirect(SYS_close, p);
++				syscall_redirect(SYS_close, 1, (long)p);
  				p = ret;
  			}
  			switch(op->cmd) {
  			case FDOP_CLOSE:
 -				__syscall(SYS_close, op->fd);
-+				syscall_redirect(SYS_close, op->fd);
++				syscall_redirect(SYS_close, 1, (long)op->fd);
  				break;
  			case FDOP_DUP2:
  				fd = op->srcfd;
-@@ -109,20 +109,23 @@ static int child(void *args_vp)
+@@ -109,20 +109,28 @@ static int child(void *args_vp)
  					if ((ret=__sys_dup2(fd, op->fd))<0)
  						goto fail;
  				} else {
 -					ret = __syscall(SYS_fcntl, fd, F_GETFD);
 -					ret = __syscall(SYS_fcntl, fd, F_SETFD,
 -					                ret & ~FD_CLOEXEC);
-+					ret = syscall_redirect(SYS_fcntl, fd,
-+							       F_GETFD);
-+					ret = syscall_redirect(SYS_fcntl, fd,
-+							       F_SETFD,
-+							       ret & ~FD_CLOEXEC);
++					ret = syscall_redirect(SYS_fcntl, 2,
++							       (long)fd,
++							       (long)F_GETFD);
++					ret = syscall_redirect(SYS_fcntl, 3,
++							       (long)fd,
++							       (long)F_SETFD,
++							       (long)(ret & ~FD_CLOEXEC));
  					if (ret<0)
  						goto fail;
  				}
  				break;
  			case FDOP_OPEN:
 -				fd = __sys_open(op->path, op->oflag, op->mode);
-+				fd = syscall_redirect(SYS_open, op->oflag,
-+						      (op->mode) | O_LARGEFILE);
++				fd = syscall_redirect(SYS_open, 3,
++						      (long)op->path,
++						      (long)op->oflag,
++						      (long)((op->mode) | O_LARGEFILE));
  				if ((ret=fd) < 0) goto fail;
  				if (fd != op->fd) {
  					if ((ret=__sys_dup2(fd, op->fd))<0)
  						goto fail;
 -					__syscall(SYS_close, fd);
-+					syscall_redirect(SYS_close, fd);
++					syscall_redirect(SYS_close, 1,
++							 (long)fd);
  				}
  				break;
  			}
-@@ -133,7 +136,7 @@ static int child(void *args_vp)
+@@ -133,7 +141,8 @@ static int child(void *args_vp)
  	 * to a different fd. We don't use F_DUPFD_CLOEXEC above because
  	 * it would fail on older kernels and atomicity is not needed --
  	 * in this process there are no threads or signal handlers. */
 -	__syscall(SYS_fcntl, p, F_SETFD, FD_CLOEXEC);
-+	syscall_redirect(SYS_fcntl, p, F_SETFD, FD_CLOEXEC);
++	syscall_redirect(SYS_fcntl, 3, (long)p, (long)F_SETFD,
++			 (long)FD_CLOEXEC);
  
  	pthread_sigmask(SIG_SETMASK, (attr->__flags & POSIX_SPAWN_SETSIGMASK)
  		? &attr->__mask : &args->oldmask, 0);
-@@ -144,7 +147,7 @@ static int child(void *args_vp)
+@@ -144,7 +153,7 @@ static int child(void *args_vp)
  fail:
  	/* Since sizeof errno < PIPE_BUF, the write is atomic. */
  	ret = -ret;
 -	if (ret) while (__syscall(SYS_write, p, &ret, sizeof ret) < 0);
-+	if (ret) while (syscall_redirect(SYS_write, p, &ret, sizeof ret) < 0);
++	if (ret) while (syscall_redirect(SYS_write, 3, (long)p, (long)&ret, (long)sizeof ret) < 0);
  	_exit(127);
  }
  
@@ -4140,15 +4382,15 @@ diff -u -p a/process/fork.c b/process/fork.c
  	__block_all_sigs(&set);
  #ifdef SYS_fork
 -	ret = __syscall(SYS_fork);
-+	ret = syscall_redirect(SYS_fork);
++	ret = syscall_redirect(SYS_fork, 0);
  #else
 -	ret = __syscall(SYS_clone, SIGCHLD, 0);
-+	ret = syscall_redirect(SYS_clone, SIGCHLD, 0);
++	ret = syscall_redirect(SYS_clone, 2, (long)SIGCHLD, (long)0);
  #endif
  	if (!ret) {
  		pthread_t self = __pthread_self();
 -		self->tid = __syscall(SYS_gettid);
-+		self->tid = syscall_redirect(SYS_gettid);
++		self->tid = syscall_redirect(SYS_gettid, 0);
  		self->robust_list.off = 0;
  		self->robust_list.pending = 0;
  		libc.threads_minus_1 = 0;

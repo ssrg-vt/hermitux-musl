@@ -4,7 +4,7 @@
 #include <sys/syscall.h>
 #include "syscall_arch.h"
 
-int syscall_redirect(int id, ...);
+long syscall_redirect(int id, int argnum, ...);
 
 #ifndef SYSCALL_RLIM_INFINITY
 #define SYSCALL_RLIM_INFINITY (~0ULL)
