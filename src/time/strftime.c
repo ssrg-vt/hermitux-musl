@@ -6,10 +6,7 @@
 #include <time.h>
 #include <limits.h>
 #include "locale_impl.h"
-#include "libc.h"
 #include "time_impl.h"
-
-const char *__nl_langinfo_l(nl_item, locale_t);
 
 static int is_leap(int y)
 {
@@ -44,9 +41,6 @@ static int week_num(const struct tm *tm)
 	}
 	return val;
 }
-
-const char *__tm_to_tzname(const struct tm *);
-size_t __strftime_l(char *restrict, size_t, const char *restrict, const struct tm *restrict, locale_t);
 
 const char *__strftime_fmt_1(char (*s)[100], size_t *l, int f, const struct tm *tm, locale_t loc, int pad)
 {
@@ -181,9 +175,8 @@ const char *__strftime_fmt_1(char (*s)[100], size_t *l, int f, const struct tm *
 			*l = 0;
 			return "";
 		}
-		*l = snprintf(*s, sizeof *s, "%+.2d%.2d",
-			(tm->__tm_gmtoff)/3600,
-			abs(tm->__tm_gmtoff%3600)/60);
+		*l = snprintf(*s, sizeof *s, "%+.4ld",
+			tm->__tm_gmtoff/3600*100 + tm->__tm_gmtoff%3600/60);
 		return *s;
 	case 'Z':
 		if (tm->tm_isdst < 0) {
@@ -251,14 +244,21 @@ size_t __strftime_l(char *restrict s, size_t n, const char *restrict f, const st
 		t = __strftime_fmt_1(&buf, &k, *f, tm, loc, pad);
 		if (!t) break;
 		if (width) {
-			for (; *t=='+' || *t=='-' || (*t=='0'&&t[1]); t++, k--);
-			width--;
-			if (plus && tm->tm_year >= 10000-1900)
-				s[l++] = '+';
-			else if (tm->tm_year < -1900)
+			/* Trim off any sign and leading zeros, then
+			 * count remaining digits to determine behavior
+			 * for the + flag. */
+			if (*t=='+' || *t=='-') t++, k--;
+			for (; *t=='0' && t[1]-'0'<10U; t++, k--);
+			if (width < k) width = k;
+			size_t d;
+			for (d=0; t[d]-'0'<10U; d++);
+			if (tm->tm_year < -1900) {
 				s[l++] = '-';
-			else
-				width++;
+				width--;
+			} else if (plus && d+(width-k) >= (*p=='C'?3:5)) {
+				s[l++] = '+';
+				width--;
+			}
 			for (; width > k && l < n; width--)
 				s[l++] = '0';
 		}

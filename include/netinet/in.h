@@ -335,6 +335,7 @@ struct ip6_mtuinfo {
 #define IPV6_V6ONLY             26
 #define IPV6_JOIN_ANYCAST       27
 #define IPV6_LEAVE_ANYCAST      28
+#define IPV6_MULTICAST_ALL      29
 #define IPV6_IPSEC_POLICY       34
 #define IPV6_XFRM_POLICY        35
 #define IPV6_HDRINCL            36
@@ -363,6 +364,7 @@ struct ip6_mtuinfo {
 #define IPV6_TRANSPARENT        75
 #define IPV6_UNICAST_IF         76
 #define IPV6_RECVFRAGSIZE       77
+#define IPV6_FREEBIND           78
 
 #define IPV6_ADD_MEMBERSHIP     IPV6_JOIN_GROUP
 #define IPV6_DROP_MEMBERSHIP    IPV6_LEAVE_GROUP
