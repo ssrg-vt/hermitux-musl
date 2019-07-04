@@ -1,6 +1,7 @@
 #!/bin/bash
 
-HERMITUX=/home/pierre/Desktop/hermitux/hermitux-kernel/prefix/x86_64-hermit/extra/tests/hermitux
+HERMITUX_BASE=$HOME/Desktop/hermitux
+HERMITUX=$HERMITUX_BASE/hermitux-kernel/prefix/x86_64-hermit/extra/tests/hermitux
 
 echo "static void unsupported(int id);"
 echo
@@ -18,7 +19,6 @@ for f in $syscalls; do
 		addr=0
 	fi
 
-	#echo -e "\t(void *)0x$addr,\t\t/* $id $f */ "
 	printf "\t(void *)0x%-16s, /* $id $f */\n" "$addr"
 	let id="$id+1"
 
