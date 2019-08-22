@@ -11,26 +11,34 @@ fi
 echo "static void unsupported(int id);"
 echo
 
-echo "static void *syscalls[335] = {"
+echo "static void *syscalls[1100] = {"
 
 if [ "$1" == "aarch64" ]; then
-    syscalls=`cat syscalls_data.aarch64 | cut -d "," -f 3 | awk 'BEGIN { ORS = " " } { print }'`
+    SYSCALL_FILE=syscalls_data.aarch64
     HERMITUX=$HERMITUX_BASE/hermitux-kernel/prefix/aarch64-hermit/extra/tests/hermitux
 else
-    syscalls=`cat syscalls_data.x86-64 | cut -d "," -f 3 | awk 'BEGIN { ORS = " " } { print }'`
+    SYSCALL_FILE=syscalls_data.x86-64
     HERMITUX=$HERMITUX_BASE/hermitux-kernel/prefix/x86_64-hermit/extra/tests/hermitux
 fi
+
+syscalls=`cat $SYSCALL_FILE | cut -d "," -f 3 | awk 'BEGIN { ORS = " " } { print }'`
 
 id=0
 for f in $syscalls; do
 
 	addr=`nm $HERMITUX | grep -G " sys_$f$" | cut -f 1 -d " "`
+    num=`cat $SYSCALL_FILE | grep ",$f$" | cut -f 1 -d ,`
+
+    while [ $id != $num ]; do
+	    printf "\t(void *)0x0, /* $id padding */\n"
+    	let id="$id+1"
+    done
 
 	if [ "$addr" == "" ]; then
 		addr=0
 	fi
 
-	printf "\t(void *)0x%-16s, /* $id $f */\n" "$addr"
+	printf "\t(void *)0x%-16s, /* $num $f */\n" "$addr"
 	let id="$id+1"
 
 done
