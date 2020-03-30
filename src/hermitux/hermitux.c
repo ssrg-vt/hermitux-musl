@@ -2,6 +2,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <sys/select.h>
+#include <fcntl.h>
 
 #ifndef NFDBITS
 #define NFDBITS (8*(int)sizeof(long))
@@ -62,4 +63,8 @@ int __vsnprintf_chk(char * s, size_t maxlen, int flag, size_t slen, const char *
 
 int __vfprintf_chk(FILE * fp, int flag, const char * format, va_list ap) {
 	return vfprintf(fp, format, ap);
+}
+
+int fcntl64(int fd, int cmd, va_list ap) {
+    return fcntl(fd, cmd, ap);
 }
