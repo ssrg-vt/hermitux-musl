@@ -3,6 +3,7 @@
 #include <string.h>
 #include <sys/select.h>
 #include <fcntl.h>
+#include <poll.h>
 
 #ifndef NFDBITS
 #define NFDBITS (8*(int)sizeof(long))
@@ -68,3 +69,24 @@ int __vfprintf_chk(FILE * fp, int flag, const char * format, va_list ap) {
 int fcntl64(int fd, int cmd, va_list ap) {
     return fcntl(fd, cmd, ap);
 }
+
+char * __strcat_chk (char *dest, const char *src, size_t destlen) {
+    return strcat(dest, src);
+}
+
+char * __stpcpy_chk (char *dest, const char *src, size_t destlen) {
+    return strcpy(dest, src);
+}
+
+char * __strcpy_chk (char *dest, const char *src, size_t destlen) {
+    return strcpy(dest, src);
+}
+
+int __poll_chk (struct pollfd *fds, nfds_t nfds, int timeout, __SIZE_TYPE__ fdslen) {
+	return poll(fds, nfds, timeout);
+}
+
+char *__strncpy_chk (char *s1, const char *s2, size_t n, size_t s1len) {
+	return strncpy(s1, s2, n);
+}
+
